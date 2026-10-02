@@ -8,15 +8,18 @@ import re
 import uuid
 import asyncio
 import time
+import json
 from pathlib import Path
 
 app = FastAPI(
     title="SAHN Download Backend",
-    version="0.4.0"
+    version="0.5.0"
 )
 
 DOWNLOAD_DIR = Path("/tmp/sahn-downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+JOBS_FILE = DOWNLOAD_DIR / "jobs.json"
 
 downloads = {}
 
@@ -30,13 +33,46 @@ class DownloadStartRequest(BaseModel):
     filename: str | None = None
 
 
+def load_jobs():
+    global downloads
+
+    if not JOBS_FILE.exists():
+        downloads = {}
+        return
+
+    try:
+        with open(JOBS_FILE, "r", encoding="utf-8") as file:
+            downloads = json.load(file)
+    except Exception:
+        downloads = {}
+
+
+def save_jobs():
+    temp_file = JOBS_FILE.with_suffix(".tmp")
+
+    with open(temp_file, "w", encoding="utf-8") as file:
+        json.dump(
+            downloads,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    temp_file.replace(JOBS_FILE)
+
+
+@app.on_event("startup")
+async def startup_event():
+    load_jobs()
+
+
 @app.get("/")
 async def root():
     return {
         "success": True,
         "service": "SAHN Download Backend",
         "status": "online",
-        "version": "0.4.0"
+        "version": "0.5.0"
     }
 
 
@@ -243,12 +279,10 @@ async def analyze(request: AnalyzeRequest):
             return {
                 "success": True,
                 "stage": "analyzed",
-
                 "source": {
                     "url": final_url,
                     "hostname": hostname
                 },
-
                 "media": {
                     "type": media_type,
                     "content_type": content_type,
@@ -257,17 +291,13 @@ async def analyze(request: AnalyzeRequest):
                     "size_bytes": size_bytes,
                     "content_length": content_length
                 },
-
                 "download": {
                     "accessible": response.status_code < 400,
                     "status_code": response.status_code,
                     "supports_range": range_supported,
                     "supports_resume": range_supported
                 },
-
-                "message": (
-                    "Media URL analyzed successfully."
-                )
+                "message": "Media URL analyzed successfully."
             }
 
     except httpx.HTTPError as error:
@@ -290,6 +320,7 @@ async def run_download(download_id: str, url: str, filename: str):
 
     item["status"] = "downloading"
     item["started_at"] = time.time()
+    save_jobs()
 
     try:
         async with httpx.AsyncClient(
@@ -321,9 +352,7 @@ async def run_download(download_id: str, url: str, filename: str):
                     or ""
                 )
 
-                item["status_code"] = (
-                    response.status_code
-                )
+                item["status_code"] = response.status_code
 
                 downloaded = 0
                 last_time = time.time()
@@ -337,6 +366,7 @@ async def run_download(download_id: str, url: str, filename: str):
 
                         if item["cancel_requested"]:
                             item["status"] = "cancelled"
+                            save_jobs()
 
                             try:
                                 file_path.unlink(
@@ -348,27 +378,20 @@ async def run_download(download_id: str, url: str, filename: str):
                             return
 
                         file.write(chunk)
-
                         downloaded += len(chunk)
 
-                        item["downloaded_bytes"] = (
-                            downloaded
-                        )
+                        item["downloaded_bytes"] = downloaded
 
                         now = time.time()
 
                         if now - last_time >= 1:
-                            elapsed = (
-                                now - last_time
-                            )
+                            elapsed = now - last_time
 
                             speed = (
                                 downloaded - last_bytes
                             ) / elapsed
 
-                            item["speed_bytes"] = (
-                                int(speed)
-                            )
+                            item["speed_bytes"] = int(speed)
 
                             last_time = now
                             last_bytes = downloaded
@@ -384,6 +407,8 @@ async def run_download(download_id: str, url: str, filename: str):
                         else:
                             item["progress"] = None
 
+                        save_jobs()
+
                         await asyncio.sleep(0)
 
                 item["status"] = "completed"
@@ -391,8 +416,11 @@ async def run_download(download_id: str, url: str, filename: str):
                 item["file_path"] = str(file_path)
                 item["completed_at"] = time.time()
 
+                save_jobs()
+
     except asyncio.CancelledError:
         item["status"] = "cancelled"
+        save_jobs()
 
         try:
             file_path.unlink(
@@ -404,6 +432,7 @@ async def run_download(download_id: str, url: str, filename: str):
     except Exception as error:
         item["status"] = "failed"
         item["error"] = str(error)
+        save_jobs()
 
 
 @app.post("/download/start")
@@ -453,6 +482,8 @@ async def start_download(
         "error": None
     }
 
+    save_jobs()
+
     asyncio.create_task(
         run_download(
             download_id,
@@ -482,28 +513,26 @@ async def get_download(
             detail="Download not found."
         )
 
+    file_path = item.get("file_path")
+
+    file_exists = (
+        bool(file_path)
+        and Path(file_path).exists()
+    )
+
     return {
         "success": True,
         "download": {
             "id": item["id"],
             "status": item["status"],
             "filename": item["filename"],
-            "downloaded_bytes": item[
-                "downloaded_bytes"
-            ],
-            "total_bytes": item[
-                "total_bytes"
-            ],
-            "progress": item[
-                "progress"
-            ],
-            "speed_bytes": item[
-                "speed_bytes"
-            ],
-            "content_type": item[
-                "content_type"
-            ],
+            "downloaded_bytes": item["downloaded_bytes"],
+            "total_bytes": item["total_bytes"],
+            "progress": item["progress"],
+            "speed_bytes": item["speed_bytes"],
+            "content_type": item["content_type"],
             "supports_resume": False,
+            "file_available": file_exists,
             "error": item["error"]
         }
     }
@@ -546,7 +575,8 @@ async def get_download_file(
     return FileResponse(
         path=str(path),
         filename=item["filename"],
-        media_type=item["content_type"] or "application/octet-stream"
+        media_type=item["content_type"]
+        or "application/octet-stream"
     )
 
 
@@ -575,6 +605,7 @@ async def cancel_download(
         }
 
     item["cancel_requested"] = True
+    save_jobs()
 
     return {
         "success": True,
