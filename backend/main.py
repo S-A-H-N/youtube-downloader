@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl
 import httpx
 from urllib.parse import urlparse, unquote
@@ -11,7 +12,7 @@ from pathlib import Path
 
 app = FastAPI(
     title="SAHN Download Backend",
-    version="0.3.0"
+    version="0.4.0"
 )
 
 DOWNLOAD_DIR = Path("/tmp/sahn-downloads")
@@ -35,7 +36,7 @@ async def root():
         "success": True,
         "service": "SAHN Download Backend",
         "status": "online",
-        "version": "0.3.0"
+        "version": "0.4.0"
     }
 
 
@@ -380,7 +381,6 @@ async def run_download(download_id: str, url: str, filename: str):
                                 ) * 100,
                                 2
                             )
-
                         else:
                             item["progress"] = None
 
@@ -507,6 +507,47 @@ async def get_download(
             "error": item["error"]
         }
     }
+
+
+@app.get("/download/{download_id}/file")
+async def get_download_file(
+    download_id: str
+):
+    item = downloads.get(download_id)
+
+    if not item:
+        raise HTTPException(
+            status_code=404,
+            detail="Download not found."
+        )
+
+    if item["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Download is not completed yet."
+        )
+
+    file_path = item.get("file_path")
+
+    if not file_path:
+        raise HTTPException(
+            status_code=404,
+            detail="Downloaded file is unavailable."
+        )
+
+    path = Path(file_path)
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Downloaded file no longer exists."
+        )
+
+    return FileResponse(
+        path=str(path),
+        filename=item["filename"],
+        media_type=item["content_type"] or "application/octet-stream"
+    )
 
 
 @app.post("/download/{download_id}/cancel")
