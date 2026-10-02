@@ -4,7 +4,7 @@ import httpx
 
 app = FastAPI(
     title="SAHN Download Backend",
-    version="0.1.0"
+    version="0.1.1"
 )
 
 
@@ -18,7 +18,7 @@ async def root():
         "success": True,
         "service": "SAHN Download Backend",
         "status": "online",
-        "version": "0.1.0"
+        "version": "0.1.1"
     }
 
 
@@ -51,17 +51,23 @@ async def analyze(request: AnalyzeRequest):
                 response.headers.get("content-length")
             )
 
+            final_url = str(response.url)
+            hostname = response.url.host
+
             return {
                 "success": True,
                 "stage": "analyzed",
+
                 "source": {
-                    "url": str(response.url),
-                    "hostname": response.url.hostname
+                    "url": final_url,
+                    "hostname": hostname
                 },
+
                 "media": {
                     "content_type": content_type,
                     "content_length": content_length
                 },
+
                 "message": "URL analyzed successfully."
             }
 
@@ -69,4 +75,10 @@ async def analyze(request: AnalyzeRequest):
         raise HTTPException(
             status_code=400,
             detail=f"Unable to analyze URL: {error}"
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal analysis error: {error}"
         )
