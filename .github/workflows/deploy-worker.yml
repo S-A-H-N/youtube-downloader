@@ -6,21 +6,22 @@ on:
       - main
     paths:
       - "backend/**"
-      - "wrangler.jsonc"
       - ".github/workflows/deploy-worker.yml"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
+      - name: Install Wrangler
+        run: npm install --no-save wrangler@4
 
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v4
-        with:
-          command: deploy backend/worker.js --name sahn-download-api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy backend/worker.js --name sahn-download-api
