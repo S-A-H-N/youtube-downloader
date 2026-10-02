@@ -413,7 +413,7 @@ def create_b2_download_url(object_name, filename):
     client = get_b2_client()
 
     response_headers = {
-        "response-content-disposition": (
+        "ResponseContentDisposition": (
             f'attachment; filename="{filename}"'
         )
     }
