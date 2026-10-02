@@ -24,4 +24,4 @@ jobs:
         run: npm install --no-save wrangler@4
 
       - name: Deploy Worker
-        run: npx wrangler deploy backend/worker.js --name sahn-download-api
+        run: npx wrangler deploy backend/worker.js --name sahn-download-api --compatibility-date 2026-10-01
