@@ -1,3 +1,6 @@
+const BACKEND_URL =
+  "https://sahn-download-backend.onrender.com";
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
@@ -24,7 +27,8 @@ export default {
           success: true,
           service: "SAHN Download API",
           status: "online",
-          version: "0.2.0"
+          version: "0.3.0",
+          backend: BACKEND_URL
         },
         corsHeaders
       );
@@ -34,176 +38,7 @@ export default {
       request.method === "POST" &&
       url.pathname === "/analyze"
     ) {
-      let body;
-
-      try {
-        body = await request.json();
-      } catch (error) {
-        return jsonResponse(
-          {
-            success: false,
-            error: "Invalid JSON body."
-          },
-          corsHeaders,
-          400
-        );
-      }
-
-      const videoUrl =
-        typeof body.url === "string"
-          ? body.url.trim()
-          : "";
-
-      if (!videoUrl) {
-        return jsonResponse(
-          {
-            success: false,
-            error: "URL is required."
-          },
-          corsHeaders,
-          400
-        );
-      }
-
-      let parsedUrl;
-
-      try {
-        parsedUrl = new URL(videoUrl);
-      } catch (error) {
-        return jsonResponse(
-          {
-            success: false,
-            error: "Invalid URL."
-          },
-          corsHeaders,
-          400
-        );
-      }
-
-      if (
-        parsedUrl.protocol !== "https:" &&
-        parsedUrl.protocol !== "http:"
-      ) {
-        return jsonResponse(
-          {
-            success: false,
-            error: "Only HTTP and HTTPS URLs are supported."
-          },
-          corsHeaders,
-          400
-        );
-      }
-
-      const hostname =
-        parsedUrl.hostname.toLowerCase();
-
-      /*
-       * YOUTUBE
-       */
-
-      if (
-        hostname === "youtube.com" ||
-        hostname === "www.youtube.com" ||
-        hostname === "m.youtube.com" ||
-        hostname === "youtu.be" ||
-        hostname === "www.youtu.be"
-      ) {
-        const metadata =
-          await getYouTubeMetadata(parsedUrl.href);
-
-        if (metadata) {
-          return jsonResponse(
-            {
-              success: true,
-
-              stage: "metadata_ready",
-
-              source: {
-                hostname: hostname,
-                url: parsedUrl.href
-              },
-
-              metadata: {
-                title: metadata.title,
-                thumbnail: metadata.thumbnail,
-                duration: null
-              },
-
-              formats: [],
-
-              message:
-                "Video metadata loaded successfully. Format provider is not connected yet."
-            },
-            corsHeaders
-          );
-        }
-
-        return jsonResponse(
-          {
-            success: true,
-
-            stage: "url_validated",
-
-            source: {
-              hostname: hostname,
-              url: parsedUrl.href
-            },
-
-            metadata: {
-              title: null,
-              thumbnail: null,
-              duration: null
-            },
-
-            formats: [],
-
-            message:
-              "URL is valid, but metadata could not be loaded."
-          },
-          corsHeaders
-        );
-      }
-
-      /*
-       * GENERIC URL
-       */
-
-      const genericMetadata =
-        await getGenericMetadata(parsedUrl.href);
-
-      return jsonResponse(
-        {
-          success: true,
-
-          stage:
-            genericMetadata
-              ? "metadata_ready"
-              : "url_validated",
-
-          source: {
-            hostname: hostname,
-            url: parsedUrl.href
-          },
-
-          metadata: {
-            title:
-              genericMetadata?.title || null,
-
-            thumbnail:
-              genericMetadata?.thumbnail || null,
-
-            duration: null
-          },
-
-          formats: [],
-
-          message:
-            genericMetadata
-              ? "Page metadata loaded successfully."
-              : "URL received successfully. Metadata was not available."
-        },
-        corsHeaders
-      );
+      return handleAnalyze(request, corsHeaders);
     }
 
     return jsonResponse(
@@ -219,6 +54,224 @@ export default {
 
 
 /*
+ * ANALYZE
+ */
+
+async function handleAnalyze(
+  request,
+  corsHeaders
+) {
+  let body;
+
+  try {
+    body = await request.json();
+  } catch (error) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "Invalid JSON body."
+      },
+      corsHeaders,
+      400
+    );
+  }
+
+  const videoUrl =
+    typeof body.url === "string"
+      ? body.url.trim()
+      : "";
+
+  if (!videoUrl) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "URL is required."
+      },
+      corsHeaders,
+      400
+    );
+  }
+
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(videoUrl);
+  } catch (error) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "Invalid URL."
+      },
+      corsHeaders,
+      400
+    );
+  }
+
+  if (
+    parsedUrl.protocol !== "https:" &&
+    parsedUrl.protocol !== "http:"
+  ) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "Only HTTP and HTTPS URLs are supported."
+      },
+      corsHeaders,
+      400
+    );
+  }
+
+  const hostname =
+    parsedUrl.hostname.toLowerCase();
+
+
+  /*
+   * YOUTUBE
+   *
+   * Keep metadata-only behavior.
+   */
+
+  if (isYouTubeHost(hostname)) {
+    const metadata =
+      await getYouTubeMetadata(parsedUrl.href);
+
+    if (metadata) {
+      return jsonResponse(
+        {
+          success: true,
+          stage: "metadata_ready",
+
+          source: {
+            hostname: hostname,
+            url: parsedUrl.href
+          },
+
+          metadata: {
+            title: metadata.title,
+            thumbnail: metadata.thumbnail,
+            duration: null
+          },
+
+          formats: [],
+
+          message:
+            "Video metadata loaded successfully. Download formats require an authorized media provider."
+        },
+        corsHeaders
+      );
+    }
+
+    return jsonResponse(
+      {
+        success: true,
+        stage: "url_validated",
+
+        source: {
+          hostname: hostname,
+          url: parsedUrl.href
+        },
+
+        metadata: {
+          title: null,
+          thumbnail: null,
+          duration: null
+        },
+
+        formats: [],
+
+        message:
+          "URL is valid, but metadata could not be loaded."
+      },
+      corsHeaders
+    );
+  }
+
+
+  /*
+   * GENERIC / AUTHORIZED MEDIA URL
+   *
+   * Send the request to Render Backend.
+   */
+
+  try {
+    const backendResponse =
+      await fetch(
+        BACKEND_URL + "/analyze",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body: JSON.stringify({
+            url: parsedUrl.href
+          })
+        }
+      );
+
+    const contentType =
+      backendResponse.headers.get(
+        "content-type"
+      ) || "";
+
+    if (!contentType.includes("application/json")) {
+      return jsonResponse(
+        {
+          success: false,
+          error:
+            "Backend returned an unexpected response."
+        },
+        corsHeaders,
+        502
+      );
+    }
+
+    const data =
+      await backendResponse.json();
+
+    return jsonResponse(
+      data,
+      corsHeaders,
+      backendResponse.status
+    );
+
+  } catch (error) {
+    console.error(
+      "Backend connection error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        success: false,
+        error:
+          "Backend is temporarily unavailable. Please try again."
+      },
+      corsHeaders,
+      502
+    );
+  }
+}
+
+
+/*
+ * YOUTUBE HOST CHECK
+ */
+
+function isYouTubeHost(hostname) {
+  return (
+    hostname === "youtube.com" ||
+    hostname === "www.youtube.com" ||
+    hostname === "m.youtube.com" ||
+    hostname === "youtu.be" ||
+    hostname === "www.youtu.be"
+  );
+}
+
+
+/*
  * YOUTUBE METADATA
  */
 
@@ -230,12 +283,17 @@ async function getYouTubeMetadata(videoUrl) {
       "&format=json";
 
     const response =
-      await fetch(endpoint, {
-        method: "GET",
-        headers: {
-          "Accept": "application/json"
+      await fetch(
+        endpoint,
+        {
+          method: "GET",
+
+          headers: {
+            "Accept":
+              "application/json"
+          }
         }
-      });
+      );
 
     if (!response.ok) {
       return null;
@@ -264,163 +322,6 @@ async function getYouTubeMetadata(videoUrl) {
 
     return null;
   }
-}
-
-
-/*
- * GENERIC PAGE METADATA
- */
-
-async function getGenericMetadata(pageUrl) {
-  try {
-    const response =
-      await fetch(pageUrl, {
-        method: "GET",
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (compatible; SAHN-Download/0.2)"
-        }
-      });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const contentType =
-      response.headers.get("content-type") || "";
-
-    if (
-      !contentType.includes("text/html")
-    ) {
-      return null;
-    }
-
-    const html =
-      await response.text();
-
-    const title =
-      extractMeta(
-        html,
-        "og:title"
-      ) ||
-      extractTitle(html);
-
-    const thumbnail =
-      extractMeta(
-        html,
-        "og:image"
-      );
-
-    return {
-      title: title,
-      thumbnail: thumbnail
-    };
-
-  } catch (error) {
-    console.error(
-      "Generic metadata error:",
-      error
-    );
-
-    return null;
-  }
-}
-
-
-/*
- * META TAG PARSER
- */
-
-function extractMeta(
-  html,
-  property
-) {
-  const escaped =
-    property.replace(
-      /[.*+?^${}()|[\]\\]/g,
-      "\\$&"
-    );
-
-  const patterns = [
-    new RegExp(
-      '<meta[^>]+property=["\']' +
-      escaped +
-      '["\'][^>]+content=["\']([^"\']+)["\']',
-      "i"
-    ),
-
-    new RegExp(
-      '<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']' +
-      escaped +
-      '["\']',
-      "i"
-    ),
-
-    new RegExp(
-      '<meta[^>]+name=["\']' +
-      escaped +
-      '["\'][^>]+content=["\']([^"\']+)["\']',
-      "i"
-    ),
-
-    new RegExp(
-      '<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']' +
-      escaped +
-      '["\']',
-      "i"
-    )
-  ];
-
-  for (
-    const pattern of patterns
-  ) {
-    const match =
-      html.match(pattern);
-
-    if (match && match[1]) {
-      return decodeHtml(
-        match[1].trim()
-      );
-    }
-  }
-
-  return null;
-}
-
-
-/*
- * HTML TITLE
- */
-
-function extractTitle(html) {
-  const match =
-    html.match(
-      /<title[^>]*>([\s\S]*?)<\/title>/i
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  return decodeHtml(
-    match[1].trim()
-  );
-}
-
-
-/*
- * HTML ENTITY DECODER
- */
-
-function decodeHtml(value) {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#x2F;/gi, "/");
 }
 
 
