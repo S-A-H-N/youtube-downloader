@@ -13,7 +13,7 @@ from pathlib import Path
 
 app = FastAPI(
     title="SAHN Download Backend",
-    version="0.5.0"
+    version="0.6.0"
 )
 
 DOWNLOAD_DIR = Path("/tmp/sahn-downloads")
@@ -51,12 +51,7 @@ def save_jobs():
     temp_file = JOBS_FILE.with_suffix(".tmp")
 
     with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(
-            downloads,
-            file,
-            ensure_ascii=False,
-            indent=2
-        )
+        json.dump(downloads, file, ensure_ascii=False, indent=2)
 
     temp_file.replace(JOBS_FILE)
 
@@ -72,7 +67,7 @@ async def root():
         "success": True,
         "service": "SAHN Download Backend",
         "status": "online",
-        "version": "0.5.0"
+        "version": "0.6.0"
     }
 
 
@@ -84,10 +79,9 @@ async def health():
     }
 
 
-def extract_filename(response: httpx.Response):
+def extract_filename(response):
     content_disposition = (
-        response.headers.get("content-disposition")
-        or ""
+        response.headers.get("content-disposition") or ""
     )
 
     match = re.search(
@@ -110,7 +104,7 @@ def extract_filename(response: httpx.Response):
     return None
 
 
-def detect_extension(filename: str, content_type: str):
+def detect_extension(filename, content_type):
     if filename:
         extension = os.path.splitext(filename)[1]
 
@@ -136,7 +130,7 @@ def detect_extension(filename: str, content_type: str):
     return mime_map.get(content_type)
 
 
-def detect_media_type(content_type: str, filename: str):
+def detect_media_type(content_type, filename):
     value = (content_type or "").lower()
     name = (filename or "").lower()
 
@@ -181,7 +175,7 @@ def detect_media_type(content_type: str, filename: str):
     return "unknown"
 
 
-def safe_filename(filename: str):
+def safe_filename(filename):
     filename = os.path.basename(filename)
 
     filename = re.sub(
@@ -190,19 +184,14 @@ def safe_filename(filename: str):
         filename
     )
 
-    if not filename:
-        filename = "download"
-
-    return filename
+    return filename or "download"
 
 
 async def check_range_support(client, url):
     try:
         response = await client.get(
             url,
-            headers={
-                "Range": "bytes=0-0"
-            }
+            headers={"Range": "bytes=0-0"}
         )
 
         return response.status_code == 206
@@ -231,8 +220,7 @@ async def analyze(request: AnalyzeRequest):
             response = await client.head(url)
 
             content_type = (
-                response.headers.get("content-type")
-                or ""
+                response.headers.get("content-type") or ""
             )
 
             content_length = (
@@ -313,13 +301,20 @@ async def analyze(request: AnalyzeRequest):
         )
 
 
-async def run_download(download_id: str, url: str, filename: str):
+async def run_download(download_id, url, filename, resume=True):
     item = downloads[download_id]
-
     file_path = DOWNLOAD_DIR / filename
 
+    offset = (
+        file_path.stat().st_size
+        if resume and file_path.exists()
+        else 0
+    )
+
     item["status"] = "downloading"
-    item["started_at"] = time.time()
+    item["cancel_requested"] = False
+    item["downloaded_bytes"] = offset
+    item["resumed_from_bytes"] = offset
     save_jobs()
 
     try:
@@ -328,53 +323,74 @@ async def run_download(download_id: str, url: str, filename: str):
             timeout=None
         ) as client:
 
+            headers = {}
+
+            if offset > 0:
+                headers["Range"] = f"bytes={offset}-"
+
             async with client.stream(
                 "GET",
-                url
+                url,
+                headers=headers
             ) as response:
 
                 response.raise_for_status()
 
-                total = response.headers.get(
+                # Server ignored Range.
+                # Start over instead of corrupting the file.
+                if offset > 0 and response.status_code != 206:
+                    offset = 0
+                    item["downloaded_bytes"] = 0
+                    item["resumed_from_bytes"] = 0
+
+                    try:
+                        file_path.unlink(
+                            missing_ok=True
+                        )
+                    except Exception:
+                        pass
+
+                content_length = response.headers.get(
                     "content-length"
                 )
 
-                item["total_bytes"] = (
-                    int(total)
-                    if total
-                    else None
-                )
+                if content_length:
+                    content_length = int(content_length)
 
+                if response.status_code == 206 and offset > 0:
+                    total = offset + content_length
+                else:
+                    total = content_length
+
+                item["total_bytes"] = total
                 item["content_type"] = (
-                    response.headers.get(
-                        "content-type"
-                    )
-                    or ""
+                    response.headers.get("content-type") or ""
+                )
+                item["status_code"] = response.status_code
+                item["supports_resume"] = (
+                    response.status_code == 206
+                    or response.headers.get(
+                        "accept-ranges",
+                        ""
+                    ).lower() == "bytes"
                 )
 
-                item["status_code"] = response.status_code
+                mode = "ab" if offset > 0 else "wb"
 
-                downloaded = 0
+                downloaded = offset
                 last_time = time.time()
-                last_bytes = 0
+                last_bytes = downloaded
 
-                with open(file_path, "wb") as file:
+                with open(file_path, mode) as file:
 
                     async for chunk in response.aiter_bytes(
                         chunk_size=1024 * 256
                     ):
 
                         if item["cancel_requested"]:
-                            item["status"] = "cancelled"
+                            item["status"] = "paused"
+                            item["downloaded_bytes"] = downloaded
                             save_jobs()
-
-                            try:
-                                file_path.unlink(
-                                    missing_ok=True
-                                )
-                            except Exception:
-                                pass
-
                             return
 
                         file.write(chunk)
@@ -396,38 +412,28 @@ async def run_download(download_id: str, url: str, filename: str):
                             last_time = now
                             last_bytes = downloaded
 
-                        if item["total_bytes"]:
+                        if total:
                             item["progress"] = round(
-                                (
-                                    downloaded
-                                    / item["total_bytes"]
-                                ) * 100,
+                                (downloaded / total) * 100,
                                 2
                             )
                         else:
                             item["progress"] = None
 
                         save_jobs()
-
                         await asyncio.sleep(0)
 
                 item["status"] = "completed"
                 item["progress"] = 100
+                item["downloaded_bytes"] = downloaded
                 item["file_path"] = str(file_path)
                 item["completed_at"] = time.time()
 
                 save_jobs()
 
     except asyncio.CancelledError:
-        item["status"] = "cancelled"
+        item["status"] = "paused"
         save_jobs()
-
-        try:
-            file_path.unlink(
-                missing_ok=True
-            )
-        except Exception:
-            pass
 
     except Exception as error:
         item["status"] = "failed"
@@ -440,13 +446,9 @@ async def start_download(
     request: DownloadStartRequest
 ):
     url = str(request.url)
-
     parsed = urlparse(url)
 
-    if parsed.scheme not in {
-        "http",
-        "https"
-    }:
+    if parsed.scheme not in {"http", "https"}:
         raise HTTPException(
             status_code=400,
             detail="Only HTTP and HTTPS URLs are supported."
@@ -457,14 +459,20 @@ async def start_download(
     filename = request.filename
 
     if not filename:
-        filename = os.path.basename(
-            parsed.path
-        )
+        filename = os.path.basename(parsed.path)
 
     if not filename:
         filename = f"download-{download_id}"
 
     filename = safe_filename(filename)
+
+    # Avoid overwriting another active file.
+    file_path = DOWNLOAD_DIR / filename
+
+    if file_path.exists():
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        filename = f"{stem}-{download_id}{suffix}"
 
     downloads[download_id] = {
         "id": download_id,
@@ -477,6 +485,8 @@ async def start_download(
         "speed_bytes": 0,
         "content_type": None,
         "status_code": None,
+        "supports_resume": False,
+        "resumed_from_bytes": 0,
         "cancel_requested": False,
         "file_path": None,
         "error": None
@@ -488,7 +498,8 @@ async def start_download(
         run_download(
             download_id,
             url,
-            filename
+            filename,
+            resume=False
         )
     )
 
@@ -501,10 +512,57 @@ async def start_download(
     }
 
 
+@app.post("/download/{download_id}/resume")
+async def resume_download(download_id):
+    item = downloads.get(download_id)
+
+    if not item:
+        raise HTTPException(
+            status_code=404,
+            detail="Download not found."
+        )
+
+    if item["status"] == "completed":
+        return {
+            "success": True,
+            "id": download_id,
+            "status": "completed",
+            "message": "Download is already completed."
+        }
+
+    if item["status"] == "downloading":
+        return {
+            "success": True,
+            "id": download_id,
+            "status": "downloading",
+            "message": "Download is already running."
+        }
+
+    item["status"] = "queued"
+    item["error"] = None
+    item["cancel_requested"] = False
+
+    save_jobs()
+
+    asyncio.create_task(
+        run_download(
+            download_id,
+            item["url"],
+            item["filename"],
+            resume=True
+        )
+    )
+
+    return {
+        "success": True,
+        "id": download_id,
+        "status": "queued",
+        "message": "Resume requested."
+    }
+
+
 @app.get("/download/{download_id}")
-async def get_download(
-    download_id: str
-):
+async def get_download(download_id):
     item = downloads.get(download_id)
 
     if not item:
@@ -531,7 +589,8 @@ async def get_download(
             "progress": item["progress"],
             "speed_bytes": item["speed_bytes"],
             "content_type": item["content_type"],
-            "supports_resume": False,
+            "supports_resume": item["supports_resume"],
+            "resumed_from_bytes": item["resumed_from_bytes"],
             "file_available": file_exists,
             "error": item["error"]
         }
@@ -539,9 +598,7 @@ async def get_download(
 
 
 @app.get("/download/{download_id}/file")
-async def get_download_file(
-    download_id: str
-):
+async def get_download_file(download_id):
     item = downloads.get(download_id)
 
     if not item:
@@ -581,9 +638,7 @@ async def get_download_file(
 
 
 @app.post("/download/{download_id}/cancel")
-async def cancel_download(
-    download_id: str
-):
+async def cancel_download(download_id):
     item = downloads.get(download_id)
 
     if not item:
@@ -595,13 +650,13 @@ async def cancel_download(
     if item["status"] in {
         "completed",
         "failed",
-        "cancelled"
+        "paused"
     }:
         return {
             "success": True,
             "id": download_id,
             "status": item["status"],
-            "message": "Download is already finished."
+            "message": "Download is already stopped."
         }
 
     item["cancel_requested"] = True
@@ -611,5 +666,5 @@ async def cancel_download(
         "success": True,
         "id": download_id,
         "status": "cancelling",
-        "message": "Download cancellation requested."
+        "message": "Download pause requested."
     }
