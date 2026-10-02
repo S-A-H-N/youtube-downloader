@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, HttpUrl
 import httpx
 from urllib.parse import urlparse, unquote
@@ -10,11 +10,15 @@ import asyncio
 import time
 import json
 from pathlib import Path
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
 
 app = FastAPI(
     title="SAHN Download Backend",
-    version="0.6.0"
+    version="0.7.0"
 )
+
 
 DOWNLOAD_DIR = Path("/tmp/sahn-downloads")
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -23,6 +27,45 @@ JOBS_FILE = DOWNLOAD_DIR / "jobs.json"
 
 downloads = {}
 
+
+# ---------------------------------------------------------
+# B2 CONFIGURATION
+# ---------------------------------------------------------
+
+B2_BUCKET_NAME = os.getenv("B2_BUCKET_NAME")
+B2_REGION = os.getenv("B2_REGION", "us-west-004")
+B2_KEY_ID = os.getenv("B2_KEY_ID")
+B2_APPLICATION_KEY = os.getenv("B2_APPLICATION_KEY")
+
+B2_ENDPOINT = (
+    f"https://s3.{B2_REGION}.backblazeb2.com"
+)
+
+
+def get_b2_client():
+    if not B2_BUCKET_NAME:
+        raise RuntimeError("B2_BUCKET_NAME is not configured.")
+
+    if not B2_KEY_ID:
+        raise RuntimeError("B2_KEY_ID is not configured.")
+
+    if not B2_APPLICATION_KEY:
+        raise RuntimeError(
+            "B2_APPLICATION_KEY is not configured."
+        )
+
+    return boto3.client(
+        "s3",
+        endpoint_url=B2_ENDPOINT,
+        aws_access_key_id=B2_KEY_ID,
+        aws_secret_access_key=B2_APPLICATION_KEY,
+        region_name=B2_REGION
+    )
+
+
+# ---------------------------------------------------------
+# MODELS
+# ---------------------------------------------------------
 
 class AnalyzeRequest(BaseModel):
     url: HttpUrl
@@ -33,6 +76,10 @@ class DownloadStartRequest(BaseModel):
     filename: str | None = None
 
 
+# ---------------------------------------------------------
+# JOB PERSISTENCE
+# ---------------------------------------------------------
+
 def load_jobs():
     global downloads
 
@@ -41,8 +88,13 @@ def load_jobs():
         return
 
     try:
-        with open(JOBS_FILE, "r", encoding="utf-8") as file:
+        with open(
+            JOBS_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
             downloads = json.load(file)
+
     except Exception:
         downloads = {}
 
@@ -50,8 +102,17 @@ def load_jobs():
 def save_jobs():
     temp_file = JOBS_FILE.with_suffix(".tmp")
 
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(downloads, file, ensure_ascii=False, indent=2)
+    with open(
+        temp_file,
+        "w",
+        encoding="utf-8"
+    ) as file:
+        json.dump(
+            downloads,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
 
     temp_file.replace(JOBS_FILE)
 
@@ -61,13 +122,18 @@ async def startup_event():
     load_jobs()
 
 
+# ---------------------------------------------------------
+# BASIC ENDPOINTS
+# ---------------------------------------------------------
+
 @app.get("/")
 async def root():
     return {
         "success": True,
         "service": "SAHN Download Backend",
         "status": "online",
-        "version": "0.6.0"
+        "version": "0.7.0",
+        "storage": "backblaze-b2"
     }
 
 
@@ -75,13 +141,19 @@ async def root():
 async def health():
     return {
         "success": True,
-        "status": "healthy"
+        "status": "healthy",
+        "storage": "backblaze-b2"
     }
 
 
+# ---------------------------------------------------------
+# FILE HELPERS
+# ---------------------------------------------------------
+
 def extract_filename(response):
     content_disposition = (
-        response.headers.get("content-disposition") or ""
+        response.headers.get("content-disposition")
+        or ""
     )
 
     match = re.search(
@@ -111,7 +183,9 @@ def detect_extension(filename, content_type):
         if extension:
             return extension.lower().lstrip(".")
 
-    content_type = (content_type or "").lower().split(";")[0]
+    content_type = (
+        content_type or ""
+    ).lower().split(";")[0]
 
     mime_map = {
         "video/mp4": "mp4",
@@ -200,6 +274,10 @@ async def check_range_support(client, url):
         return False
 
 
+# ---------------------------------------------------------
+# ANALYZE
+# ---------------------------------------------------------
+
 @app.post("/analyze")
 async def analyze(request: AnalyzeRequest):
     url = str(request.url)
@@ -220,7 +298,8 @@ async def analyze(request: AnalyzeRequest):
             response = await client.head(url)
 
             content_type = (
-                response.headers.get("content-type") or ""
+                response.headers.get("content-type")
+                or ""
             )
 
             content_length = (
@@ -301,8 +380,67 @@ async def analyze(request: AnalyzeRequest):
         )
 
 
-async def run_download(download_id, url, filename, resume=True):
+# ---------------------------------------------------------
+# B2 UPLOAD
+# ---------------------------------------------------------
+
+def upload_to_b2(file_path, object_name, content_type):
+    client = get_b2_client()
+
+    extra_args = {}
+
+    if content_type:
+        extra_args["ContentType"] = (
+            content_type.split(";")[0].strip()
+        )
+
+    if extra_args:
+        client.upload_file(
+            str(file_path),
+            B2_BUCKET_NAME,
+            object_name,
+            ExtraArgs=extra_args
+        )
+    else:
+        client.upload_file(
+            str(file_path),
+            B2_BUCKET_NAME,
+            object_name
+        )
+
+
+def create_b2_download_url(object_name, filename):
+    client = get_b2_client()
+
+    response_headers = {
+        "response-content-disposition": (
+            f'attachment; filename="{filename}"'
+        )
+    }
+
+    return client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": B2_BUCKET_NAME,
+            "Key": object_name,
+            **response_headers
+        },
+        ExpiresIn=900
+    )
+
+
+# ---------------------------------------------------------
+# DOWNLOAD ENGINE
+# ---------------------------------------------------------
+
+async def run_download(
+    download_id,
+    url,
+    filename,
+    resume=True
+):
     item = downloads[download_id]
+
     file_path = DOWNLOAD_DIR / filename
 
     offset = (
@@ -315,6 +453,7 @@ async def run_download(download_id, url, filename, resume=True):
     item["cancel_requested"] = False
     item["downloaded_bytes"] = offset
     item["resumed_from_bytes"] = offset
+
     save_jobs()
 
     try:
@@ -336,10 +475,12 @@ async def run_download(download_id, url, filename, resume=True):
 
                 response.raise_for_status()
 
-                # Server ignored Range.
-                # Start over instead of corrupting the file.
-                if offset > 0 and response.status_code != 206:
+                if (
+                    offset > 0
+                    and response.status_code != 206
+                ):
                     offset = 0
+
                     item["downloaded_bytes"] = 0
                     item["resumed_from_bytes"] = 0
 
@@ -350,23 +491,41 @@ async def run_download(download_id, url, filename, resume=True):
                     except Exception:
                         pass
 
-                content_length = response.headers.get(
-                    "content-length"
+                content_length = (
+                    response.headers.get(
+                        "content-length"
+                    )
                 )
 
                 if content_length:
-                    content_length = int(content_length)
+                    content_length = int(
+                        content_length
+                    )
 
-                if response.status_code == 206 and offset > 0:
-                    total = offset + content_length
+                if (
+                    response.status_code == 206
+                    and offset > 0
+                    and content_length is not None
+                ):
+                    total = (
+                        offset + content_length
+                    )
                 else:
                     total = content_length
 
                 item["total_bytes"] = total
+
                 item["content_type"] = (
-                    response.headers.get("content-type") or ""
+                    response.headers.get(
+                        "content-type"
+                    )
+                    or ""
                 )
-                item["status_code"] = response.status_code
+
+                item["status_code"] = (
+                    response.status_code
+                )
+
                 item["supports_resume"] = (
                     response.status_code == 206
                     or response.headers.get(
@@ -375,13 +534,21 @@ async def run_download(download_id, url, filename, resume=True):
                     ).lower() == "bytes"
                 )
 
-                mode = "ab" if offset > 0 else "wb"
+                mode = (
+                    "ab"
+                    if offset > 0
+                    else "wb"
+                )
 
                 downloaded = offset
+
                 last_time = time.time()
                 last_bytes = downloaded
 
-                with open(file_path, mode) as file:
+                with open(
+                    file_path,
+                    mode
+                ) as file:
 
                     async for chunk in response.aiter_bytes(
                         chunk_size=1024 * 256
@@ -389,45 +556,94 @@ async def run_download(download_id, url, filename, resume=True):
 
                         if item["cancel_requested"]:
                             item["status"] = "paused"
-                            item["downloaded_bytes"] = downloaded
+                            item["downloaded_bytes"] = (
+                                downloaded
+                            )
+
                             save_jobs()
                             return
 
                         file.write(chunk)
                         downloaded += len(chunk)
 
-                        item["downloaded_bytes"] = downloaded
+                        item["downloaded_bytes"] = (
+                            downloaded
+                        )
 
                         now = time.time()
 
                         if now - last_time >= 1:
-                            elapsed = now - last_time
+                            elapsed = (
+                                now - last_time
+                            )
 
                             speed = (
-                                downloaded - last_bytes
+                                downloaded
+                                - last_bytes
                             ) / elapsed
 
-                            item["speed_bytes"] = int(speed)
+                            item["speed_bytes"] = (
+                                int(speed)
+                            )
 
                             last_time = now
                             last_bytes = downloaded
 
                         if total:
                             item["progress"] = round(
-                                (downloaded / total) * 100,
+                                (
+                                    downloaded
+                                    / total
+                                ) * 100,
                                 2
                             )
                         else:
                             item["progress"] = None
 
                         save_jobs()
+
                         await asyncio.sleep(0)
 
-                item["status"] = "completed"
+                # -----------------------------------------
+                # DOWNLOAD COMPLETE
+                # -----------------------------------------
+
+                item["status"] = "uploading"
                 item["progress"] = 100
                 item["downloaded_bytes"] = downloaded
-                item["file_path"] = str(file_path)
+
+                save_jobs()
+
+                object_name = (
+                    f"downloads/{download_id}/{filename}"
+                )
+
+                upload_to_b2(
+                    file_path,
+                    object_name,
+                    item["content_type"]
+                )
+
+                item["storage"] = "backblaze-b2"
+                item["b2_bucket"] = (
+                    B2_BUCKET_NAME
+                )
+                item["b2_object"] = object_name
+                item["file_available"] = True
+                item["status"] = "completed"
                 item["completed_at"] = time.time()
+
+                save_jobs()
+
+                # Local temporary copy is no longer needed.
+                try:
+                    file_path.unlink(
+                        missing_ok=True
+                    )
+                except Exception:
+                    pass
+
+                item["file_path"] = None
 
                 save_jobs()
 
@@ -441,14 +657,22 @@ async def run_download(download_id, url, filename, resume=True):
         save_jobs()
 
 
+# ---------------------------------------------------------
+# START DOWNLOAD
+# ---------------------------------------------------------
+
 @app.post("/download/start")
 async def start_download(
     request: DownloadStartRequest
 ):
     url = str(request.url)
+
     parsed = urlparse(url)
 
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme not in {
+        "http",
+        "https"
+    }:
         raise HTTPException(
             status_code=400,
             detail="Only HTTP and HTTPS URLs are supported."
@@ -459,20 +683,26 @@ async def start_download(
     filename = request.filename
 
     if not filename:
-        filename = os.path.basename(parsed.path)
+        filename = os.path.basename(
+            parsed.path
+        )
 
     if not filename:
-        filename = f"download-{download_id}"
+        filename = (
+            f"download-{download_id}"
+        )
 
     filename = safe_filename(filename)
 
-    # Avoid overwriting another active file.
     file_path = DOWNLOAD_DIR / filename
 
     if file_path.exists():
         stem = Path(filename).stem
         suffix = Path(filename).suffix
-        filename = f"{stem}-{download_id}{suffix}"
+
+        filename = (
+            f"{stem}-{download_id}{suffix}"
+        )
 
     downloads[download_id] = {
         "id": download_id,
@@ -489,6 +719,10 @@ async def start_download(
         "resumed_from_bytes": 0,
         "cancel_requested": False,
         "file_path": None,
+        "file_available": False,
+        "storage": None,
+        "b2_bucket": None,
+        "b2_object": None,
         "error": None
     }
 
@@ -512,7 +746,13 @@ async def start_download(
     }
 
 
-@app.post("/download/{download_id}/resume")
+# ---------------------------------------------------------
+# RESUME
+# ---------------------------------------------------------
+
+@app.post(
+    "/download/{download_id}/resume"
+)
 async def resume_download(download_id):
     item = downloads.get(download_id)
 
@@ -527,15 +767,22 @@ async def resume_download(download_id):
             "success": True,
             "id": download_id,
             "status": "completed",
-            "message": "Download is already completed."
+            "message": (
+                "Download is already completed."
+            )
         }
 
-    if item["status"] == "downloading":
+    if item["status"] in {
+        "downloading",
+        "uploading"
+    }:
         return {
             "success": True,
             "id": download_id,
-            "status": "downloading",
-            "message": "Download is already running."
+            "status": item["status"],
+            "message": (
+                "Download is already running."
+            )
         }
 
     item["status"] = "queued"
@@ -561,7 +808,13 @@ async def resume_download(download_id):
     }
 
 
-@app.get("/download/{download_id}")
+# ---------------------------------------------------------
+# STATUS
+# ---------------------------------------------------------
+
+@app.get(
+    "/download/{download_id}"
+)
 async def get_download(download_id):
     item = downloads.get(download_id)
 
@@ -571,33 +824,52 @@ async def get_download(download_id):
             detail="Download not found."
         )
 
-    file_path = item.get("file_path")
-
-    file_exists = (
-        bool(file_path)
-        and Path(file_path).exists()
-    )
-
     return {
         "success": True,
         "download": {
             "id": item["id"],
             "status": item["status"],
             "filename": item["filename"],
-            "downloaded_bytes": item["downloaded_bytes"],
-            "total_bytes": item["total_bytes"],
-            "progress": item["progress"],
-            "speed_bytes": item["speed_bytes"],
-            "content_type": item["content_type"],
-            "supports_resume": item["supports_resume"],
-            "resumed_from_bytes": item["resumed_from_bytes"],
-            "file_available": file_exists,
+            "downloaded_bytes": item[
+                "downloaded_bytes"
+            ],
+            "total_bytes": item[
+                "total_bytes"
+            ],
+            "progress": item[
+                "progress"
+            ],
+            "speed_bytes": item[
+                "speed_bytes"
+            ],
+            "content_type": item[
+                "content_type"
+            ],
+            "supports_resume": item[
+                "supports_resume"
+            ],
+            "resumed_from_bytes": item[
+                "resumed_from_bytes"
+            ],
+            "file_available": item.get(
+                "file_available",
+                False
+            ),
+            "storage": item.get(
+                "storage"
+            ),
             "error": item["error"]
         }
     }
 
 
-@app.get("/download/{download_id}/file")
+# ---------------------------------------------------------
+# FILE DELIVERY
+# ---------------------------------------------------------
+
+@app.get(
+    "/download/{download_id}/file"
+)
 async def get_download_file(download_id):
     item = downloads.get(download_id)
 
@@ -613,31 +885,43 @@ async def get_download_file(download_id):
             detail="Download is not completed yet."
         )
 
-    file_path = item.get("file_path")
+    object_name = item.get("b2_object")
 
-    if not file_path:
+    if not object_name:
         raise HTTPException(
             status_code=404,
-            detail="Downloaded file is unavailable."
+            detail="B2 object is unavailable."
         )
 
-    path = Path(file_path)
+    try:
+        url = create_b2_download_url(
+            object_name,
+            item["filename"]
+        )
 
-    if not path.exists():
+        return RedirectResponse(
+            url=url,
+            status_code=302
+        )
+
+    except (
+        BotoCoreError,
+        ClientError,
+        RuntimeError
+    ) as error:
         raise HTTPException(
-            status_code=404,
-            detail="Downloaded file no longer exists."
+            status_code=500,
+            detail=f"B2 file delivery error: {error}"
         )
 
-    return FileResponse(
-        path=str(path),
-        filename=item["filename"],
-        media_type=item["content_type"]
-        or "application/octet-stream"
-    )
 
+# ---------------------------------------------------------
+# CANCEL / PAUSE
+# ---------------------------------------------------------
 
-@app.post("/download/{download_id}/cancel")
+@app.post(
+    "/download/{download_id}/cancel"
+)
 async def cancel_download(download_id):
     item = downloads.get(download_id)
 
@@ -656,15 +940,20 @@ async def cancel_download(download_id):
             "success": True,
             "id": download_id,
             "status": item["status"],
-            "message": "Download is already stopped."
+            "message": (
+                "Download is already stopped."
+            )
         }
 
     item["cancel_requested"] = True
+
     save_jobs()
 
     return {
         "success": True,
         "id": download_id,
         "status": "cancelling",
-        "message": "Download pause requested."
+        "message": (
+            "Download pause requested."
+        )
     }
