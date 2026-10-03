@@ -1531,6 +1531,10 @@ async function startDirectDownload(data) {
         "⏳ <span>STARTING...</span>";
 
     if (downloadStatus) {
+        downloadStatus.classList.remove(
+            "analyze-error"
+        );
+
         downloadStatus.textContent =
             "Starting download...";
     }
@@ -1571,20 +1575,155 @@ async function startDirectDownload(data) {
             );
         }
 
+        const jobId =
+            result.id;
+
+        if (!jobId) {
+            throw new Error(
+                "Download job ID was not returned."
+            );
+        }
+
         if (downloadStatus) {
             downloadStatus.textContent =
-                "Download started. ID: " +
-                result.id;
+                "Download started. Preparing file...";
         }
 
         downloadButton.innerHTML =
-            "✓ <span>DOWNLOAD STARTED</span>";
+            "⏳ <span>PREPARING...</span>";
+
+        let attempts = 0;
+        const maxAttempts = 300;
+
+        while (attempts < maxAttempts) {
+
+            attempts++;
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        2000
+                    )
+            );
+
+            const statusResponse =
+                await fetch(
+                    API_BASE +
+                    "/download/" +
+                    encodeURIComponent(jobId)
+                );
+
+            const statusData =
+                await statusResponse.json();
+
+            if (
+                !statusResponse.ok ||
+                !statusData.success
+            ) {
+                throw new Error(
+                    statusData.error ||
+                    "Could not read download status."
+                );
+            }
+
+            const status =
+                String(
+                    statusData.status ||
+                    ""
+                ).toLowerCase();
+
+            const progress =
+                Number(
+                    statusData.progress_percent ??
+                    statusData.progress ??
+                    0
+                );
+
+            if (downloadStatus) {
+
+                if (
+                    Number.isFinite(progress) &&
+                    progress > 0 &&
+                    progress < 100
+                ) {
+
+                    downloadStatus.textContent =
+                        "Downloading... " +
+                        Math.round(progress) +
+                        "%";
+
+                } else {
+
+                    downloadStatus.textContent =
+                        "Downloading...";
+                }
+            }
+
+            if (
+                statusData.file_available === true ||
+                status === "completed" ||
+                status === "complete" ||
+                status === "finished"
+            ) {
+
+                const fileUrl =
+                    API_BASE +
+                    "/download/" +
+                    encodeURIComponent(jobId) +
+                    "/file";
+
+                downloadButton.disabled =
+                    false;
+
+                downloadButton.classList.remove(
+                    "loading"
+                );
+
+                downloadButton.innerHTML =
+                    "↓ <span>DOWNLOAD FILE</span>";
+
+                downloadButton.onclick =
+                    () => {
+                        window.location.href =
+                            fileUrl;
+                    };
+
+                if (downloadStatus) {
+                    downloadStatus.textContent =
+                        "File is ready.";
+                }
+
+                return;
+            }
+
+            if (
+                status === "failed" ||
+                status === "error" ||
+                status === "cancelled" ||
+                status === "canceled"
+            ) {
+
+                throw new Error(
+                    statusData.error ||
+                    "Download failed."
+                );
+            }
+        }
+
+        throw new Error(
+            "Download is taking too long. Please try again later."
+        );
 
     } catch (error) {
 
-        console.error(error);
+        console.error(
+            "Download error:",
+            error
+        );
 
         if (downloadStatus) {
+
             downloadStatus.textContent =
                 error.message ||
                 "Download failed.";
