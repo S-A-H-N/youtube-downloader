@@ -1642,6 +1642,7 @@ async function startDirectDownload(data) {
                     body:
                         JSON.stringify({
                             url:
+                                data.selected_format?.url ||
                                 data.source?.url ||
                                 input.value.trim()
                         })
@@ -1713,16 +1714,20 @@ async function startDirectDownload(data) {
                 );
             }
 
+            const download =
+                statusData.download ||
+                statusData;
+
             const status =
                 String(
-                    statusData.status ||
+                    download.status ||
                     ""
                 ).toLowerCase();
 
             const progress =
                 Number(
-                    statusData.progress_percent ??
-                    statusData.progress ??
+                    download.progress_percent ??
+                    download.progress ??
                     0
                 );
 
@@ -1739,6 +1744,20 @@ async function startDirectDownload(data) {
                         Math.round(progress) +
                         "%";
 
+                } else if (
+                    status === "queued"
+                ) {
+
+                    downloadStatus.textContent =
+                        "Download queued...";
+
+                } else if (
+                    status === "uploading"
+                ) {
+
+                    downloadStatus.textContent =
+                        "Preparing final file...";
+
                 } else {
 
                     downloadStatus.textContent =
@@ -1747,7 +1766,7 @@ async function startDirectDownload(data) {
             }
 
             if (
-                statusData.file_available === true ||
+                download.file_available === true ||
                 status === "completed" ||
                 status === "complete" ||
                 status === "finished"
@@ -1771,13 +1790,33 @@ async function startDirectDownload(data) {
 
                 downloadButton.onclick =
                     () => {
-                        window.location.href =
+
+                        const link =
+                            document.createElement(
+                                "a"
+                            );
+
+                        link.href =
                             fileUrl;
+
+                        link.target =
+                            "_blank";
+
+                        link.rel =
+                            "noopener";
+
+                        document.body.appendChild(
+                            link
+                        );
+
+                        link.click();
+
+                        link.remove();
                     };
 
                 if (downloadStatus) {
                     downloadStatus.textContent =
-                        "File is ready.";
+                        "File is ready. Tap DOWNLOAD FILE to save it.";
                 }
 
                 return;
@@ -1791,6 +1830,7 @@ async function startDirectDownload(data) {
             ) {
 
                 throw new Error(
+                    download.error ||
                     statusData.error ||
                     "Download failed."
                 );
@@ -1808,17 +1848,6 @@ async function startDirectDownload(data) {
             error
         );
 
-        if (downloadStatus) {
-
-            downloadStatus.textContent =
-                error.message ||
-                "Download failed.";
-
-            downloadStatus.classList.add(
-                "analyze-error"
-            );
-        }
-
         downloadButton.disabled =
             false;
 
@@ -1828,6 +1857,17 @@ async function startDirectDownload(data) {
 
         downloadButton.innerHTML =
             "↓ <span>DOWNLOAD</span>";
+
+        if (downloadStatus) {
+
+            downloadStatus.classList.add(
+                "analyze-error"
+            );
+
+            downloadStatus.textContent =
+                error.message ||
+                "Download failed.";
+        }
     }
 }
 
