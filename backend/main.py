@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import boto3
 import httpx
@@ -30,6 +30,46 @@ B2_KEY_ID = os.environ["B2_KEY_ID"]
 B2_APPLICATION_KEY = os.environ["B2_APPLICATION_KEY"]
 
 B2_ENDPOINT = f"https://s3.{B2_REGION}.backblazeb2.com"
+
+YOUTUBE_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+}
+
+
+def extract_youtube_video_id(url: str) -> str | None:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    if host in {"youtu.be", "www.youtu.be"}:
+        video_id = parsed.path.strip("/").split("/")[0]
+
+    elif host in {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+    }:
+        if parsed.path == "/watch":
+            video_id = parse_qs(parsed.query).get("v", [None])[0]
+        elif parsed.path.startswith("/shorts/"):
+            video_id = parsed.path.split("/shorts/", 1)[1].split("/", 1)[0]
+        elif parsed.path.startswith("/live/"):
+            video_id = parsed.path.split("/live/", 1)[1].split("/", 1)[0]
+        else:
+            return None
+    else:
+        return None
+
+    if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return None
+
+    return video_id
+
 
 app = FastAPI(title="SAHN Download Backend", version=APP_VERSION)
 
@@ -235,12 +275,132 @@ def create_b2_download_url(object_name: str, filename: str):
     )
 
 
+async def analyze_youtube_url(
+    url: str,
+    video_id: str,
+):
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="YouTube API is not configured.",
+        )
+
+    endpoint = "https://www.googleapis.com/youtube/v3/videos"
+
+    params = {
+        "part": "snippet,contentDetails,statistics",
+        "id": video_id,
+        "key": api_key,
+    }
+
+    async with httpx.AsyncClient(
+        timeout=20,
+    ) as client:
+        try:
+            response = await client.get(
+                endpoint,
+                params=params,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"YouTube API request failed: {exc}",
+            )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail="YouTube API returned an error.",
+        )
+
+    data = response.json()
+    items = data.get("items", [])
+
+    if not items:
+        raise HTTPException(
+            status_code=404,
+            detail="YouTube video was not found or is unavailable.",
+        )
+
+    video = items[0]
+
+    snippet = video.get("snippet", {})
+    content_details = video.get("contentDetails", {})
+    statistics = video.get("statistics", {})
+
+    thumbnails = snippet.get("thumbnails", {})
+
+    thumbnail = (
+        thumbnails.get("maxres", {}).get("url")
+        or thumbnails.get("high", {}).get("url")
+        or thumbnails.get("medium", {}).get("url")
+        or thumbnails.get("default", {}).get("url")
+    )
+
+    if urlparse(url).path.startswith("/shorts/"):
+        content_type = "short"
+    elif urlparse(url).path.startswith("/live/"):
+        content_type = "live"
+    else:
+        content_type = "video"
+
+    return {
+        "success": True,
+        "stage": "analyzed",
+        "source": {
+            "url": url,
+            "hostname": "youtube.com",
+            "platform": "youtube",
+            "video_id": video_id,
+        },
+        "media": {
+            "type": "video",
+            "content_type": "video/youtube",
+            "extension": None,
+            "filename": sanitize_filename(
+                snippet.get("title") or f"youtube-{video_id}"
+            ),
+            "size_bytes": None,
+            "content_length": None,
+        },
+        "youtube": {
+            "video_id": video_id,
+            "title": snippet.get("title"),
+            "description": snippet.get("description"),
+            "channel_id": snippet.get("channelId"),
+            "channel_title": snippet.get("channelTitle"),
+            "thumbnail": thumbnail,
+            "published_at": snippet.get("publishedAt"),
+            "duration": content_details.get("duration"),
+            "view_count": statistics.get("viewCount"),
+            "like_count": statistics.get("likeCount"),
+            "comment_count": statistics.get("commentCount"),
+            "content_type": content_type,
+        },
+        "download": {
+            "accessible": True,
+            "status_code": 200,
+            "supports_range": False,
+            "supports_resume": False,
+            "downloadable": False,
+        },
+        "formats": [],
+        "message": "YouTube video metadata analyzed successfully.",
+    }
+
+
 async def analyze_url(url: str):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(
             status_code=400,
             detail="Only HTTP and HTTPS URLs are supported.",
         )
+
+    youtube_video_id = extract_youtube_video_id(url)
+    if youtube_video_id:
+        return await analyze_youtube_url(url, youtube_video_id)
 
     async with httpx.AsyncClient(
         follow_redirects=True,
@@ -586,6 +746,15 @@ async def run_download(
 async def start_download(request: DownloadRequest):
     try:
         result = await analyze_url(request.url)
+
+        if (
+            result.get("source", {}).get("platform") == "youtube"
+            and not result.get("download", {}).get("downloadable", False)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="YouTube downloads are not available through this endpoint.",
+            )
 
         filename = sanitize_filename(
             request.filename
