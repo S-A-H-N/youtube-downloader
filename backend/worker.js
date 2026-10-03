@@ -159,64 +159,104 @@ async function handleAnalyze(
   /*
    * YOUTUBE
    *
-   * Metadata-only behavior.
+   * Forward YouTube analysis to the Render backend.
+   * The backend is responsible for YouTube Data API
+   * metadata and returns the normalized response.
    */
 
   if (isYouTubeHost(hostname)) {
-    const metadata =
-      await getYouTubeMetadata(
-        parsedUrl.href
+    try {
+      const controller =
+        new AbortController();
+
+      const timeoutId =
+        setTimeout(
+          () => controller.abort(),
+          BACKEND_TIMEOUT_MS
+        );
+
+      let backendResponse;
+
+      try {
+        backendResponse =
+          await fetch(
+            BACKEND_URL + "/analyze",
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+
+              body: JSON.stringify({
+                url: parsedUrl.href
+              }),
+
+              signal:
+                controller.signal
+            }
+          );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const contentType =
+        backendResponse.headers.get(
+          "content-type"
+        ) || "";
+
+      if (
+        !contentType.includes(
+          "application/json"
+        )
+      ) {
+        return jsonResponse(
+          {
+            success: false,
+            error:
+              "Backend returned an invalid response."
+          },
+          corsHeaders,
+          502
+        );
+      }
+
+      const backendData =
+        await backendResponse.json();
+
+      return jsonResponse(
+        backendData,
+        corsHeaders,
+        backendResponse.status
       );
 
-    if (metadata) {
+    } catch (error) {
+      if (
+        error &&
+        error.name === "AbortError"
+      ) {
+        return jsonResponse(
+          {
+            success: false,
+            error:
+              "Backend analysis timed out."
+          },
+          corsHeaders,
+          504
+        );
+      }
+
       return jsonResponse(
         {
-          success: true,
-          stage: "metadata_ready",
-
-          source: {
-            hostname: hostname,
-            url: parsedUrl.href
-          },
-
-          metadata: {
-            title: metadata.title,
-            thumbnail: metadata.thumbnail,
-            duration: null
-          },
-
-          formats: [],
-
-          message:
-            "Video metadata loaded successfully. Download formats require an authorized media provider."
+          success: false,
+          error:
+            "Backend analysis request failed."
         },
-        corsHeaders
+        corsHeaders,
+        502
       );
     }
-
-    return jsonResponse(
-      {
-        success: true,
-        stage: "url_validated",
-
-        source: {
-          hostname: hostname,
-          url: parsedUrl.href
-        },
-
-        metadata: {
-          title: null,
-          thumbnail: null,
-          duration: null
-        },
-
-        formats: [],
-
-        message:
-          "URL is valid, but metadata could not be loaded."
-      },
-      corsHeaders
-    );
   }
 
 
