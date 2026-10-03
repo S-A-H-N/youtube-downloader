@@ -1458,9 +1458,14 @@ async function analyzeVideo() {
             data.formats.length > 0
         ) {
 
-            renderFormats(
-                data.formats
-            );
+            renderFormats(data.formats);
+
+        } else if (
+            data.media &&
+            data.media.content_type
+        ) {
+
+            renderDirectMedia(data);
 
         } else {
 
@@ -1469,18 +1474,17 @@ async function analyzeVideo() {
                     <div class="empty-icon">◌</div>
 
                     <h4>
-                        Quality provider not connected
+                        No download format available
                     </h4>
 
                     <p>
-                        Video information is ready.
-                        Download formats will be added next.
+                        This source does not currently provide
+                        downloadable formats.
                     </p>
                 </div>
             `;
 
         }
-
 
         /*
          * SHOW RESULT
@@ -1548,94 +1552,307 @@ function showStatus(
  * FORMAT RENDERER
  */
 
-function renderFormats(
-    formats
-) {
+function renderFormats(formats) {
 
     formatList.innerHTML = "";
 
-    formats.forEach(
-        (format, index) => {
+    formats.forEach((format, index) => {
 
-            const button =
-                document.createElement(
-                    "button"
-                );
+        const button = document.createElement("button");
 
-            button.className =
-                "format-option" +
-                (
-                    index === 0
-                        ? " selected"
-                        : ""
-                );
+        button.className =
+            "format-option" +
+            (index === 0 ? " selected" : "");
 
-            button.innerHTML = `
+        button.innerHTML = `
 
-                <span class="format-radio"></span>
+            <span class="format-radio"></span>
 
-                <div class="format-main">
+            <div class="format-main">
 
-                    <div class="format-quality">
-                        ${escapeHtml(
-                            format.quality ||
-                            format.resolution ||
-                            "Unknown"
-                        )}
-                    </div>
-
-                    <div class="format-type">
-                        ${escapeHtml(
-                            format.type ||
-                            "Video"
-                        )}
-                    </div>
-
+                <div class="format-quality">
+                    ${escapeHtml(
+                        format.quality ||
+                        format.resolution ||
+                        "Unknown"
+                    )}
                 </div>
 
-                <span class="format-size">
+                <div class="format-type">
                     ${escapeHtml(
-                        format.size ||
-                        ""
+                        format.type ||
+                        format.extension ||
+                        "Video"
                     )}
-                </span>
+                </div>
 
-            `;
+            </div>
 
-            button.addEventListener(
-                "click",
-                () => {
+            <span class="format-size">
+                ${escapeHtml(
+                    format.size ||
+                    format.size_bytes ||
+                    ""
+                )}
+            </span>
 
-                    document
-                        .querySelectorAll(
-                            ".format-option"
-                        )
-                        .forEach(
-                            item =>
-                                item.classList.remove(
-                                    "selected"
-                                )
-                        );
+        `;
 
-                    button.classList.add(
-                        "selected"
-                    );
+        button.addEventListener("click", () => {
 
-                }
-            );
+            document
+                .querySelectorAll(".format-option")
+                .forEach(item =>
+                    item.classList.remove("selected")
+                );
 
-            formatList.appendChild(
-                button
-            );
+            button.classList.add("selected");
 
-        }
+        });
+
+        formatList.appendChild(button);
+
+    });
+
+}
+
+/*
+ * DIRECT MEDIA RENDERER
+ */
+
+function renderDirectMedia(data) {
+
+    const media = data.media || {};
+
+    const sizeBytes =
+        Number(media.size_bytes || 0);
+
+    const sizeText =
+        sizeBytes > 0
+            ? formatBytes(sizeBytes)
+            : "Unknown size";
+
+    const type =
+        media.extension
+            ? media.extension.toUpperCase()
+            : "MEDIA";
+
+    const resumeText =
+        data.download?.supports_resume ||
+        media.supports_resume
+            ? "Resume supported"
+            : "Direct download";
+
+    formatList.innerHTML = `
+
+        <div class="format-option selected">
+
+            <span class="format-radio"></span>
+
+            <div class="format-main">
+
+                <div class="format-quality">
+                    ${escapeHtml(type)}
+                </div>
+
+                <div class="format-type">
+                    ${escapeHtml(
+                        media.content_type ||
+                        "Media file"
+                    )}
+                    ·
+                    ${escapeHtml(resumeText)}
+                </div>
+
+            </div>
+
+            <span class="format-size">
+                ${escapeHtml(sizeText)}
+            </span>
+
+        </div>
+
+        <button
+            id="directDownloadButton"
+            class="download-button">
+
+            ↓
+            <span>DOWNLOAD</span>
+
+        </button>
+
+        <div
+            id="downloadStatus"
+            class="analyze-status">
+        </div>
+
+    `;
+
+    const downloadButton =
+        document.getElementById(
+            "directDownloadButton"
+        );
+
+    downloadButton.addEventListener(
+        "click",
+        () => startDirectDownload(data)
     );
 
 }
 
 
 /*
+ * START DIRECT DOWNLOAD
+ */
+
+async function startDirectDownload(data) {
+
+    const downloadButton =
+        document.getElementById(
+            "directDownloadButton"
+        );
+
+    const downloadStatus =
+        document.getElementById(
+            "downloadStatus"
+        );
+
+    if (!downloadButton) {
+        return;
+    }
+
+    downloadButton.disabled = true;
+
+    downloadButton.classList.add(
+        "loading"
+    );
+
+    downloadButton.innerHTML =
+        "⏳ <span>STARTING...</span>";
+
+    downloadStatus.textContent =
+        "Starting download...";
+
+
+    try {
+
+        const response =
+            await fetch(
+                API_BASE + "/download/start",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({
+                            url:
+                                data.source?.url ||
+                                input.value.trim()
+                        })
+                }
+            );
+
+
+        const result =
+            await response.json();
+
+
+        if (
+            !response.ok ||
+            !result.success
+        ) {
+
+            throw new Error(
+                result.error ||
+                "Download could not be started."
+            );
+
+        }
+
+
+        downloadStatus.textContent =
+            "Download started. ID: " +
+            result.id;
+
+        downloadButton.innerHTML =
+            "✓ <span>DOWNLOAD STARTED</span>";
+
+    } catch (error) {
+
+        console.error(error);
+
+        downloadStatus.textContent =
+            error.message ||
+            "Download failed.";
+
+        downloadStatus.classList.add(
+            "analyze-error"
+        );
+
+        downloadButton.disabled =
+            false;
+
+        downloadButton.classList.remove(
+            "loading"
+        );
+
+        downloadButton.innerHTML =
+            "↓ <span>DOWNLOAD</span>";
+
+    }
+
+}
+
+
+/*
+ * FORMAT BYTES
+ */
+
+function formatBytes(bytes) {
+
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return "Unknown size";
+    }
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB",
+        "TB"
+    ];
+
+    let value = bytes;
+    let index = 0;
+
+    while (
+        value >= 1024 &&
+        index < units.length - 1
+    ) {
+
+        value /= 1024;
+        index++;
+
+    }
+
+    return (
+        value < 10 && index > 0
+            ? value.toFixed(1)
+            : value.toFixed(0)
+    ) + " " + units[index];
+
+}
+
+
+/*
  * HTML SAFETY
+ */
+
+
  */
 
 function escapeHtml(
