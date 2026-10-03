@@ -1,6 +1,9 @@
 const BACKEND_URL =
   "https://sahn-download-backend.onrender.com";
 
+const BACKEND_TIMEOUT_MS = 25000;
+const YOUTUBE_TIMEOUT_MS = 15000;
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
@@ -18,27 +21,39 @@ export default {
       });
     }
 
+    /*
+     * HEALTH
+     */
+
     if (
       request.method === "GET" &&
-      (url.pathname === "/" || url.pathname === "/health")
+      (url.pathname === "/" ||
+        url.pathname === "/health")
     ) {
       return jsonResponse(
         {
           success: true,
           service: "SAHN Download API",
           status: "online",
-          version: "0.3.0",
+          version: "0.4.0",
           backend: BACKEND_URL
         },
         corsHeaders
       );
     }
 
+    /*
+     * ANALYZE
+     */
+
     if (
       request.method === "POST" &&
       url.pathname === "/analyze"
     ) {
-      return handleAnalyze(request, corsHeaders);
+      return handleAnalyze(
+        request,
+        corsHeaders
+      );
     }
 
     return jsonResponse(
@@ -114,7 +129,8 @@ async function handleAnalyze(
     return jsonResponse(
       {
         success: false,
-        error: "Only HTTP and HTTPS URLs are supported."
+        error:
+          "Only HTTP and HTTPS URLs are supported."
       },
       corsHeaders,
       400
@@ -128,12 +144,14 @@ async function handleAnalyze(
   /*
    * YOUTUBE
    *
-   * Keep metadata-only behavior.
+   * Metadata-only behavior.
    */
 
   if (isYouTubeHost(hostname)) {
     const metadata =
-      await getYouTubeMetadata(parsedUrl.href);
+      await getYouTubeMetadata(
+        parsedUrl.href
+      );
 
     if (metadata) {
       return jsonResponse(
@@ -190,33 +208,65 @@ async function handleAnalyze(
   /*
    * GENERIC / AUTHORIZED MEDIA URL
    *
-   * Send the request to Render Backend.
+   * Forward request to Render backend.
+   *
+   * IMPORTANT:
+   * Cloudflare Worker now has a hard timeout
+   * so a slow backend cannot hang the frontend
+   * indefinitely.
    */
 
   try {
-    const backendResponse =
-      await fetch(
-        BACKEND_URL + "/analyze",
-        {
-          method: "POST",
+    const controller =
+      new AbortController();
 
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body: JSON.stringify({
-            url: parsedUrl.href
-          })
-        }
+    const timeoutId =
+      setTimeout(
+        () => controller.abort(),
+        BACKEND_TIMEOUT_MS
       );
+
+    let backendResponse;
+
+    try {
+      backendResponse =
+        await fetch(
+          BACKEND_URL + "/analyze",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              url: parsedUrl.href
+            }),
+
+            signal:
+              controller.signal
+          }
+        );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+
+    /*
+     * Verify response type.
+     */
 
     const contentType =
       backendResponse.headers.get(
         "content-type"
       ) || "";
 
-    if (!contentType.includes("application/json")) {
+    if (
+      !contentType.includes(
+        "application/json"
+      )
+    ) {
       return jsonResponse(
         {
           success: false,
@@ -228,6 +278,11 @@ async function handleAnalyze(
       );
     }
 
+
+    /*
+     * Read backend JSON.
+     */
+
     const data =
       await backendResponse.json();
 
@@ -238,10 +293,36 @@ async function handleAnalyze(
     );
 
   } catch (error) {
+
     console.error(
       "Backend connection error:",
       error
     );
+
+
+    /*
+     * Timeout
+     */
+
+    if (
+      error &&
+      error.name === "AbortError"
+    ) {
+      return jsonResponse(
+        {
+          success: false,
+          error:
+            "Backend request timed out. Please try again."
+        },
+        corsHeaders,
+        504
+      );
+    }
+
+
+    /*
+     * General connection error
+     */
 
     return jsonResponse(
       {
@@ -260,7 +341,9 @@ async function handleAnalyze(
  * YOUTUBE HOST CHECK
  */
 
-function isYouTubeHost(hostname) {
+function isYouTubeHost(
+  hostname
+) {
   return (
     hostname === "youtube.com" ||
     hostname === "www.youtube.com" ||
@@ -275,7 +358,18 @@ function isYouTubeHost(hostname) {
  * YOUTUBE METADATA
  */
 
-async function getYouTubeMetadata(videoUrl) {
+async function getYouTubeMetadata(
+  videoUrl
+) {
+  const controller =
+    new AbortController();
+
+  const timeoutId =
+    setTimeout(
+      () => controller.abort(),
+      YOUTUBE_TIMEOUT_MS
+    );
+
   try {
     const endpoint =
       "https://www.youtube.com/oembed?url=" +
@@ -291,7 +385,10 @@ async function getYouTubeMetadata(videoUrl) {
           headers: {
             "Accept":
               "application/json"
-          }
+          },
+
+          signal:
+            controller.signal
         }
       );
 
@@ -315,12 +412,16 @@ async function getYouTubeMetadata(videoUrl) {
     };
 
   } catch (error) {
+
     console.error(
       "YouTube metadata error:",
       error
     );
 
     return null;
+
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
