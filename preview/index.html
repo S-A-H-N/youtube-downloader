@@ -1733,35 +1733,112 @@ async function startDirectDownload(data) {
 
             if (downloadStatus) {
 
-                if (
+                const downloadedBytes =
+                    Number(
+                        download.downloaded_bytes ??
+                        0
+                    );
+
+                const totalBytes =
+                    Number(
+                        download.total_bytes ??
+                        0
+                    );
+
+                const speedBytes =
+                    Number(
+                        download.speed_bytes ??
+                        0
+                    );
+
+                const safeProgress =
                     Number.isFinite(progress) &&
-                    progress > 0 &&
-                    progress < 100
-                ) {
+                    progress >= 0
+                        ? Math.min(progress, 100)
+                        : 0;
 
-                    downloadStatus.textContent =
-                        "Downloading... " +
-                        Math.round(progress) +
-                        "%";
+                const downloadedText =
+                    downloadedBytes > 0
+                        ? formatBytes(downloadedBytes)
+                        : "0 B";
 
-                } else if (
-                    status === "queued"
-                ) {
+                const totalText =
+                    totalBytes > 0
+                        ? formatBytes(totalBytes)
+                        : "Unknown size";
 
-                    downloadStatus.textContent =
-                        "Download queued...";
+                const speedText =
+                    speedBytes > 0
+                        ? formatBytes(speedBytes) + "/s"
+                        : "—";
 
-                } else if (
-                    status === "uploading"
-                ) {
+                if (status === "queued") {
 
-                    downloadStatus.textContent =
-                        "Preparing final file...";
+                    downloadStatus.innerHTML = `
+                        <div class="download-progress">
+                            <div class="download-progress-header">
+                                <span>Queued...</span>
+                                <span>0%</span>
+                            </div>
+
+                            <div class="download-progress-track">
+                                <div
+                                    class="download-progress-bar"
+                                    style="width:0%"
+                                ></div>
+                            </div>
+                        </div>
+                    `;
+
+                } else if (status === "uploading") {
+
+                    downloadStatus.innerHTML = `
+                        <div class="download-progress">
+                            <div class="download-progress-header">
+                                <span>Preparing final file...</span>
+                                <span>100%</span>
+                            </div>
+
+                            <div class="download-progress-track">
+                                <div
+                                    class="download-progress-bar"
+                                    style="width:100%"
+                                ></div>
+                            </div>
+                        </div>
+                    `;
 
                 } else {
 
-                    downloadStatus.textContent =
-                        "Downloading...";
+                    downloadStatus.innerHTML = `
+                        <div class="download-progress">
+
+                            <div class="download-progress-header">
+                                <span>Downloading...</span>
+                                <span>${Math.round(safeProgress)}%</span>
+                            </div>
+
+                            <div class="download-progress-track">
+                                <div
+                                    class="download-progress-bar"
+                                    style="width:${safeProgress}%"
+                                ></div>
+                            </div>
+
+                            <div class="download-progress-details">
+                                <span>
+                                    ${escapeHtml(downloadedText)}
+                                    /
+                                    ${escapeHtml(totalText)}
+                                </span>
+
+                                <span>
+                                    ${escapeHtml(speedText)}
+                                </span>
+                            </div>
+
+                        </div>
+                    `;
                 }
             }
 
