@@ -1428,82 +1428,168 @@ function renderDirectMedia(data) {
 
     if (!formatList) return;
 
-    const media =
-        data.media || {};
+    const media = data.media || {};
+    const formats = Array.isArray(data.formats)
+        ? data.formats
+        : [];
 
-    const sizeBytes =
-        Number(media.size_bytes || 0);
-
-    const sizeText =
-        sizeBytes > 0
-            ? formatBytes(sizeBytes)
-            : "Unknown size";
-
-    const type =
-        media.extension
-            ? media.extension.toUpperCase()
-            : "MEDIA";
-
-    const resumeText =
-        data.download?.supports_resume ||
-        media.supports_resume
-            ? "Resume supported"
-            : "Direct download";
-
-    formatList.innerHTML = `
-        <div class="format-option selected">
-
-            <span class="format-radio"></span>
-
-            <div class="format-main">
-
-                <div class="format-quality">
-                    ${escapeHtml(type)}
-                </div>
-
-                <div class="format-type">
-                    ${escapeHtml(
-                        media.content_type ||
-                        "Media file"
-                    )}
-                    ·
-                    ${escapeHtml(resumeText)}
-                </div>
-
+    if (!formats.length) {
+        formatList.innerHTML = `
+            <div class="format-option">
+                No downloadable formats were returned.
             </div>
-
-            <span class="format-size">
-                ${escapeHtml(sizeText)}
-            </span>
-
-        </div>
-
-        <button
-            id="directDownloadButton"
-            class="download-button">
-
-            ↓
-            <span>DOWNLOAD</span>
-
-        </button>
-
-        <div
-            id="downloadStatus"
-            class="analyze-status">
-        </div>
-    `;
-
-    const downloadButton =
-        document.getElementById(
-            "directDownloadButton"
-        );
-
-    if (downloadButton) {
-        downloadButton.addEventListener(
-            "click",
-            () => startDirectDownload(data)
-        );
+        `;
+        return;
     }
+
+    let selectedFormat =
+        formats.find(format => format.downloadable !== false) ||
+        formats[0];
+
+    const renderFormats = () => {
+
+        formatList.innerHTML = formats.map(
+            (format, index) => {
+
+                const sizeBytes =
+                    Number(format.size_bytes || 0);
+
+                const sizeText =
+                    sizeBytes > 0
+                        ? formatBytes(sizeBytes)
+                        : "Unknown size";
+
+                const extension =
+                    format.extension
+                        ? format.extension.toUpperCase()
+                        : "MEDIA";
+
+                const label =
+                    format.label ||
+                    extension;
+
+                const type =
+                    format.type ||
+                    media.content_type ||
+                    "Media file";
+
+                const selected =
+                    selectedFormat === format;
+
+                return `
+                    <button
+                        type="button"
+                        class="format-option ${
+                            selected ? "selected" : ""
+                        }"
+                        data-format-index="${index}"
+                        ${
+                            format.downloadable === false
+                                ? "disabled"
+                                : ""
+                        }>
+
+                        <span class="format-radio"></span>
+
+                        <div class="format-main">
+
+                            <div class="format-quality">
+                                ${escapeHtml(label)}
+                            </div>
+
+                            <div class="format-type">
+                                ${escapeHtml(type)}
+                            </div>
+
+                        </div>
+
+                        <span class="format-size">
+                            ${escapeHtml(sizeText)}
+                        </span>
+
+                    </button>
+                `;
+            }
+        ).join("") + `
+
+            <button
+                id="directDownloadButton"
+                class="download-button">
+
+                ↓
+                <span>DOWNLOAD</span>
+
+            </button>
+
+            <div
+                id="downloadStatus"
+                class="analyze-status">
+            </div>
+        `;
+
+        document
+            .querySelectorAll(".format-option[data-format-index]")
+            .forEach(button => {
+
+                button.addEventListener(
+                    "click",
+                    () => {
+
+                        const index =
+                            Number(
+                                button.dataset.formatIndex
+                            );
+
+                        if (
+                            !Number.isInteger(index) ||
+                            !formats[index] ||
+                            formats[index].downloadable === false
+                        ) {
+                            return;
+                        }
+
+                        selectedFormat =
+                            formats[index];
+
+                        renderFormats();
+                    }
+                );
+            });
+
+        const downloadButton =
+            document.getElementById(
+                "directDownloadButton"
+            );
+
+        if (downloadButton) {
+            downloadButton.addEventListener(
+                "click",
+                () => {
+
+                    const downloadData = {
+                        ...data,
+
+                        source: {
+                            ...(data.source || {}),
+                            url:
+                                selectedFormat.url ||
+                                data.source?.url ||
+                                input.value.trim()
+                        },
+
+                        selected_format:
+                            selectedFormat
+                    };
+
+                    startDirectDownload(
+                        downloadData
+                    );
+                }
+            );
+        }
+    };
+
+    renderFormats();
 }
 
 

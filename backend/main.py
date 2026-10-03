@@ -312,6 +312,21 @@ async def analyze_url(url: str):
             "supports_range": supports_range,
             "supports_resume": supports_range,
         },
+        "formats": [
+            {
+                "id": "original",
+                "label": "Original",
+                "type": content_type,
+                "extension": (
+                    filename.rsplit(".", 1)[-1]
+                    if "." in filename
+                    else None
+                ),
+                "size_bytes": total_bytes,
+                "url": str(response.url),
+                "downloadable": response.status_code < 400,
+            }
+        ],
         "message": "Media URL analyzed successfully.",
     }
 
