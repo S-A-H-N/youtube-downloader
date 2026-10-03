@@ -56,6 +56,21 @@ export default {
       );
     }
 
+    /*
+     * DOWNLOAD PROXY
+     *
+     * Forward download job requests to the Render backend.
+     * The /file endpoint is streamed as a binary response.
+     */
+
+    if (url.pathname.startsWith("/download/")) {
+      return handleDownloadProxy(
+        request,
+        url,
+        corsHeaders
+      );
+    }
+
     return jsonResponse(
       {
         success: false,
@@ -329,6 +344,93 @@ async function handleAnalyze(
         success: false,
         error:
           "Backend is temporarily unavailable. Please try again."
+      },
+      corsHeaders,
+      502
+    );
+  }
+}
+
+
+/*
+ * DOWNLOAD PROXY
+ */
+
+async function handleDownloadProxy(
+  request,
+  url,
+  corsHeaders
+) {
+  const targetUrl =
+    BACKEND_URL +
+    url.pathname +
+    url.search;
+
+  const headers = new Headers();
+
+  for (const [key, value] of request.headers) {
+    if (
+      key.toLowerCase() !== "host" &&
+      key.toLowerCase() !== "content-length"
+    ) {
+      headers.set(key, value);
+    }
+  }
+
+  const options = {
+    method: request.method,
+    headers
+  };
+
+  if (
+    request.method !== "GET" &&
+    request.method !== "HEAD"
+  ) {
+    options.body = request.body;
+  }
+
+  try {
+    const backendResponse =
+      await fetch(targetUrl, options);
+
+    const responseHeaders =
+      new Headers(backendResponse.headers);
+
+    responseHeaders.set(
+      "Access-Control-Allow-Origin",
+      corsHeaders["Access-Control-Allow-Origin"]
+    );
+
+    responseHeaders.set(
+      "Access-Control-Allow-Methods",
+      corsHeaders["Access-Control-Allow-Methods"]
+    );
+
+    responseHeaders.set(
+      "Access-Control-Allow-Headers",
+      corsHeaders["Access-Control-Allow-Headers"]
+    );
+
+    return new Response(
+      backendResponse.body,
+      {
+        status: backendResponse.status,
+        statusText: backendResponse.statusText,
+        headers: responseHeaders
+      }
+    );
+
+  } catch (error) {
+    console.error(
+      "Download proxy error:",
+      error
+    );
+
+    return jsonResponse(
+      {
+        success: false,
+        error:
+          "Download backend is temporarily unavailable."
       },
       corsHeaders,
       502
