@@ -4,3 +4,6 @@ httpx
 boto3
 
 psycopg[binary]
+
+SQLAlchemy
+alembic
