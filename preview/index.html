@@ -640,6 +640,50 @@ button {
     flex-wrap: wrap;
 }
 
+.youtube-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.youtube-stat {
+    min-width: 0;
+    padding: 10px 11px;
+    border-radius: 13px;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,.055),
+            rgba(255,255,255,.018)
+        );
+
+    border: 1px solid rgba(255,255,255,.07);
+
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+
+.youtube-stat strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.youtube-stat span {
+    display: block;
+    margin-top: 4px;
+
+    color: var(--muted);
+    font-size: 8px;
+    letter-spacing: .7px;
+}
+
 .meta-chip {
     padding: 6px 9px;
     border-radius: 8px;
@@ -1230,7 +1274,8 @@ button {
             </span>
 
             <span
-                class="meta-chip">
+                class="meta-chip"
+                id="contentTypeChip">
                 VIDEO
             </span>
 
@@ -1239,6 +1284,37 @@ button {
                 id="qualityChip">
                 Quality detection pending
             </span>
+
+        </div>
+
+        <div
+            class="youtube-stats"
+            id="youtubeStats">
+
+            <div class="youtube-stat">
+                <strong id="youtubeChannel">—</strong>
+                <span>CHANNEL</span>
+            </div>
+
+            <div class="youtube-stat">
+                <strong id="youtubeViews">—</strong>
+                <span>VIEWS</span>
+            </div>
+
+            <div class="youtube-stat">
+                <strong id="youtubeLikes">—</strong>
+                <span>LIKES</span>
+            </div>
+
+            <div class="youtube-stat">
+                <strong id="youtubeComments">—</strong>
+                <span>COMMENTS</span>
+            </div>
+
+            <div class="youtube-stat">
+                <strong id="youtubePublished">—</strong>
+                <span>PUBLISHED</span>
+            </div>
 
         </div>
 
@@ -1342,13 +1418,34 @@ const videoTitle =
     document.getElementById("videoTitle");
 
 const videoUrl =
-    document.getElementById("urlInput");
+    document.getElementById("videoUrl");
 
 const videoThumbnail =
     document.getElementById("videoThumbnail");
 
 const videoDuration =
     document.getElementById("videoDuration");
+
+const youtubeStats =
+    document.getElementById("youtubeStats");
+
+const youtubeChannel =
+    document.getElementById("youtubeChannel");
+
+const youtubeViews =
+    document.getElementById("youtubeViews");
+
+const youtubeLikes =
+    document.getElementById("youtubeLikes");
+
+const youtubeComments =
+    document.getElementById("youtubeComments");
+
+const youtubePublished =
+    document.getElementById("youtubePublished");
+
+const contentTypeChip =
+    document.getElementById("contentTypeChip");
 
 const formatList =
     document.getElementById("formatList");
@@ -1382,6 +1479,51 @@ function escapeHtml(value) {
 }
 
 
+function formatYouTubeNumber(value) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    if (number >= 1_000_000_000) {
+        return (number / 1_000_000_000).toFixed(2).replace(/\.00$/, "") + "B";
+    }
+
+    if (number >= 1_000_000) {
+        return (number / 1_000_000).toFixed(2).replace(/\.00$/, "") + "M";
+    }
+
+    if (number >= 1_000) {
+        return (number / 1_000).toFixed(2).replace(/\.00$/, "") + "K";
+    }
+
+    return number.toLocaleString();
+}
+
+
+function formatYouTubeDate(value) {
+    if (!value) {
+        return "—";
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return "—";
+    }
+
+    return date.toLocaleDateString(
+        undefined,
+        {
+            year: "numeric",
+            month: "short",
+            day: "numeric"
+        }
+    );
+}
+
+
 function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) {
         return "Unknown size";
@@ -1411,6 +1553,180 @@ function formatBytes(bytes) {
             ? value.toFixed(1)
             : value.toFixed(0)
     ) + " " + units[index];
+}
+
+
+function renderYouTubeResult(data) {
+    const youtube = data?.youtube;
+
+    if (!youtube) {
+        return false;
+    }
+
+    if (videoTitle) {
+        videoTitle.textContent =
+            youtube.title ||
+            data.media?.filename ||
+            "Untitled video";
+    }
+
+    if (videoUrl) {
+        videoUrl.textContent =
+            data.source?.url ||
+            "";
+    }
+
+    if (videoThumbnail) {
+        videoThumbnail.src =
+            youtube.thumbnail ||
+            "";
+    }
+
+    if (videoDuration) {
+        videoDuration.textContent =
+            formatYouTubeDuration(
+                youtube.duration
+            );
+    }
+
+    if (contentTypeChip) {
+        contentTypeChip.textContent =
+            String(
+                youtube.content_type ||
+                "video"
+            ).toUpperCase();
+    }
+
+    if (qualityChip) {
+        qualityChip.textContent =
+            "YouTube metadata";
+    }
+
+    if (youtubeChannel) {
+        youtubeChannel.textContent =
+            youtube.channel_title ||
+            "Unknown channel";
+    }
+
+    if (youtubeViews) {
+        youtubeViews.textContent =
+            formatYouTubeNumber(
+                youtube.view_count
+            );
+    }
+
+    if (youtubeLikes) {
+        youtubeLikes.textContent =
+            formatYouTubeNumber(
+                youtube.like_count
+            );
+    }
+
+    if (youtubeComments) {
+        youtubeComments.textContent =
+            formatYouTubeNumber(
+                youtube.comment_count
+            );
+    }
+
+    if (youtubePublished) {
+        youtubePublished.textContent =
+            formatYouTubeDate(
+                youtube.published_at
+            );
+    }
+
+    if (youtubeStats) {
+        youtubeStats.style.display =
+            "grid";
+    }
+
+    if (formatList) {
+        formatList.innerHTML = `
+            <div class="empty-card">
+                <div class="empty-icon">
+                    ▶
+                </div>
+
+                <h4>
+                    YouTube video analyzed
+                </h4>
+
+                <p>
+                    Metadata is available.
+                    Public stream formats are not provided here.
+                </p>
+
+                <button
+                    type="button"
+                    class="format-option"
+                    id="openYouTubeButton"
+                    style="margin-top:14px; justify-content:center;">
+                    OPEN IN YOUTUBE
+                </button>
+            </div>
+        `;
+
+        const openButton =
+            document.getElementById(
+                "openYouTubeButton"
+            );
+
+        if (openButton && data.source?.url) {
+            openButton.addEventListener(
+                "click",
+                () => {
+                    window.open(
+                        data.source.url,
+                        "_blank",
+                        "noopener,noreferrer"
+                    );
+                }
+            );
+        }
+    }
+
+    return true;
+}
+
+
+function formatYouTubeDuration(value) {
+    if (!value || typeof value !== "string") {
+        return "—";
+    }
+
+    const match = value.match(
+        /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/
+    );
+
+    if (!match) {
+        return value;
+    }
+
+    const hours =
+        Number(match[1] || 0);
+
+    const minutes =
+        Number(match[2] || 0);
+
+    const seconds =
+        Number(match[3] || 0);
+
+    if (hours > 0) {
+        return (
+            hours +
+            ":" +
+            String(minutes).padStart(2, "0") +
+            ":" +
+            String(seconds).padStart(2, "0")
+        );
+    }
+
+    return (
+        minutes +
+        ":" +
+        String(seconds).padStart(2, "0")
+    );
 }
 
 
@@ -2073,57 +2389,70 @@ async function analyzeVideo() {
             );
         }
 
-        if (videoTitle) {
-            videoTitle.textContent =
-                data.metadata?.title ||
-                data.media?.filename ||
-                "Untitled video";
-        }
+        const isYouTube =
+            data.source?.platform === "youtube" &&
+            data.youtube;
 
-        if (videoUrl) {
-            videoUrl.textContent =
-                data.source?.url ||
-                url;
-        }
+        if (isYouTube) {
 
-        if (videoThumbnail) {
-            videoThumbnail.src =
-                data.metadata?.thumbnail ||
-                "";
-        }
-
-        if (videoDuration) {
-            videoDuration.textContent =
-                data.metadata?.duration ||
-                "—";
-        }
-
-        if (
-            Array.isArray(data.formats) &&
-            data.formats.length > 0
-        ) {
-
-            renderDirectMedia(
-                data
-            );
-
-        } else if (
-            data.media &&
-            data.media.content_type
-        ) {
-
-            renderDirectMedia(
+            renderYouTubeResult(
                 data
             );
 
         } else {
 
-            formatList.innerHTML = `
-                <div class="format-option">
-                    No downloadable formats
-                    were returned.
-                </div>
-            `;
+            if (videoTitle) {
+                videoTitle.textContent =
+                    data.metadata?.title ||
+                    data.media?.filename ||
+                    "Untitled video";
+            }
+
+            if (videoUrl) {
+                videoUrl.textContent =
+                    data.source?.url ||
+                    url;
+            }
+
+            if (videoThumbnail) {
+                videoThumbnail.src =
+                    data.metadata?.thumbnail ||
+                    "";
+            }
+
+            if (videoDuration) {
+                videoDuration.textContent =
+                    data.metadata?.duration ||
+                    "—";
+            }
+
+            if (
+                Array.isArray(data.formats) &&
+                data.formats.length > 0
+            ) {
+
+                renderDirectMedia(
+                    data
+                );
+
+            } else if (
+                data.media &&
+                data.media.content_type
+            ) {
+
+                renderDirectMedia(
+                    data
+                );
+
+            } else {
+
+                formatList.innerHTML = `
+                    <div class="format-option">
+                        No downloadable formats
+                        were returned.
+                    </div>
+                `;
+            }
         }
 
         showStatus(
