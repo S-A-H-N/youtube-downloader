@@ -1258,23 +1258,13 @@ button {
 </div>
 
 
-<script>
 
+<script>
 const API_BASE =
     "https://sahn-download-api.amirwork2015.workers.dev";
 
-
-const homePage =
-    document.getElementById("homePage");
-
-const resultPage =
-    document.getElementById("resultPage");
-
 const input =
-    document.getElementById("urlInput");
-
-const clearButton =
-    document.getElementById("clearButton");
+    document.getElementById("videoUrl");
 
 const analyzeButton =
     document.getElementById("analyzeButton");
@@ -1282,14 +1272,11 @@ const analyzeButton =
 const analyzeText =
     document.getElementById("analyzeText");
 
-const analyzeStatus =
-    document.getElementById("analyzeStatus");
+const homePage =
+    document.getElementById("homePage");
 
-const backButton =
-    document.getElementById("backButton");
-
-const videoThumbnail =
-    document.getElementById("videoThumbnail");
+const resultPage =
+    document.getElementById("resultPage");
 
 const videoTitle =
     document.getElementById("videoTitle");
@@ -1297,279 +1284,94 @@ const videoTitle =
 const videoUrl =
     document.getElementById("videoUrl");
 
+const videoThumbnail =
+    document.getElementById("videoThumbnail");
+
 const videoDuration =
     document.getElementById("videoDuration");
 
 const formatList =
     document.getElementById("formatList");
 
+const backButton =
+    document.getElementById("backButton");
 
-/*
- * CLEAR
- */
+const analyzeStatus =
+    document.getElementById("analyzeStatus");
 
-clearButton.addEventListener(
-    "click",
-    () => {
 
-        input.value = "";
+function showStatus(message, error = false) {
+    if (!analyzeStatus) return;
 
-        analyzeStatus.textContent = "";
-
-        analyzeStatus.classList.remove(
-            "analyze-error"
-        );
-
-        input.focus();
-
-    }
-);
-
-
-/*
- * INPUT
- */
-
-input.addEventListener(
-    "input",
-    () => {
-
-        analyzeStatus.textContent = "";
-
-        analyzeStatus.classList.remove(
-            "analyze-error"
-        );
-
-    }
-);
-
-
-/*
- * ANALYZE
- */
-
-analyzeButton.addEventListener(
-    "click",
-    analyzeVideo
-);
-
-
-async function analyzeVideo() {
-
-    const url =
-        input.value.trim();
-
-
-    if (!url) {
-
-        showStatus(
-            "Please paste a supported video URL.",
-            true
-        );
-
-        input.focus();
-
-        return;
-    }
-
-
-    analyzeButton.disabled = true;
-
-    analyzeButton.classList.add(
-        "loading"
-    );
-
-    analyzeText.textContent =
-        "ANALYZING";
-
-    showStatus(
-        "Analyzing video..."
-    );
-
-
-    try {
-
-        const response =
-            await fetch(
-                API_BASE + "/analyze",
-                {
-                    method: "POST",
-
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body:
-                        JSON.stringify({
-                            url: url
-                        })
-                }
-            );
-
-
-        const data =
-            await response.json();
-
-
-        if (
-            !response.ok ||
-            !data.success
-        ) {
-
-            throw new Error(
-                data.error ||
-                "Analysis failed."
-            );
-
-        }
-
-
-        /*
-         * DISPLAY REAL DATA
-         */
-
-        videoTitle.textContent =
-            data.metadata?.title ||
-            "Untitled video";
-
-
-        videoUrl.textContent =
-            data.source?.url ||
-            url;
-
-
-        videoThumbnail.src =
-            data.metadata?.thumbnail ||
-            "";
-
-
-        videoDuration.textContent =
-            data.metadata?.duration ||
-            "—";
-
-
-        /*
-         * FORMAT AREA
-         */
-
-        if (
-            Array.isArray(data.formats) &&
-            data.formats.length > 0
-        ) {
-
-            renderFormats(data.formats);
-
-        } else if (
-            data.media &&
-            data.media.content_type
-        ) {
-
-            renderDirectMedia(data);
-
-        } else {
-
-            formatList.innerHTML = `
-                <div class="empty-card">
-                    <div class="empty-icon">◌</div>
-
-                    <h4>
-                        No download format available
-                    </h4>
-
-                    <p>
-                        This source does not currently provide
-                        downloadable formats.
-                    </p>
-                </div>
-            `;
-
-        }
-
-        /*
-         * SHOW RESULT
-         */
-
-        homePage.style.display =
-            "none";
-
-        resultPage.style.display =
-            "block";
-
-        window.scrollTo(
-            0,
-            0
-        );
-
-
-    } catch (error) {
-
-        console.error(error);
-
-        showStatus(
-            "Unable to analyze this URL. Please try again.",
-            true
-        );
-
-    } finally {
-
-        analyzeButton.disabled =
-            false;
-
-        analyzeButton.classList.remove(
-            "loading"
-        );
-
-        analyzeText.textContent =
-            "ANALYZE";
-
-    }
-
-}
-
-
-/*
- * STATUS
- */
-
-function showStatus(
-    message,
-    error = false
-) {
-
-    analyzeStatus.textContent =
-        message;
+    analyzeStatus.textContent = message;
 
     analyzeStatus.classList.toggle(
         "analyze-error",
         error
     );
-
 }
 
 
-/*
- * FORMAT RENDERER
- */
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return "Unknown size";
+    }
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB",
+        "TB"
+    ];
+
+    let value = bytes;
+    let index = 0;
+
+    while (
+        value >= 1024 &&
+        index < units.length - 1
+    ) {
+        value /= 1024;
+        index++;
+    }
+
+    return (
+        value < 10 && index > 0
+            ? value.toFixed(1)
+            : value.toFixed(0)
+    ) + " " + units[index];
+}
+
 
 function renderFormats(formats) {
+    if (!formatList) return;
 
     formatList.innerHTML = "";
 
     formats.forEach((format, index) => {
 
-        const button = document.createElement("button");
+        const button =
+            document.createElement("div");
 
         button.className =
             "format-option" +
             (index === 0 ? " selected" : "");
 
         button.innerHTML = `
-
             <span class="format-radio"></span>
 
             <div class="format-main">
-
                 <div class="format-quality">
                     ${escapeHtml(
                         format.quality ||
@@ -1585,7 +1387,6 @@ function renderFormats(formats) {
                         "Video"
                     )}
                 </div>
-
             </div>
 
             <span class="format-size">
@@ -1595,34 +1396,37 @@ function renderFormats(formats) {
                     ""
                 )}
             </span>
-
         `;
 
-        button.addEventListener("click", () => {
+        button.addEventListener(
+            "click",
+            () => {
 
-            document
-                .querySelectorAll(".format-option")
-                .forEach(item =>
-                    item.classList.remove("selected")
+                document
+                    .querySelectorAll(".format-option")
+                    .forEach(item =>
+                        item.classList.remove(
+                            "selected"
+                        )
+                    );
+
+                button.classList.add(
+                    "selected"
                 );
-
-            button.classList.add("selected");
-
-        });
+            }
+        );
 
         formatList.appendChild(button);
-
     });
-
 }
 
-/*
- * DIRECT MEDIA RENDERER
- */
 
 function renderDirectMedia(data) {
 
-    const media = data.media || {};
+    if (!formatList) return;
+
+    const media =
+        data.media || {};
 
     const sizeBytes =
         Number(media.size_bytes || 0);
@@ -1644,7 +1448,6 @@ function renderDirectMedia(data) {
             : "Direct download";
 
     formatList.innerHTML = `
-
         <div class="format-option selected">
 
             <span class="format-radio"></span>
@@ -1685,7 +1488,6 @@ function renderDirectMedia(data) {
             id="downloadStatus"
             class="analyze-status">
         </div>
-
     `;
 
     const downloadButton =
@@ -1693,17 +1495,14 @@ function renderDirectMedia(data) {
             "directDownloadButton"
         );
 
-    downloadButton.addEventListener(
-        "click",
-        () => startDirectDownload(data)
-    );
-
+    if (downloadButton) {
+        downloadButton.addEventListener(
+            "click",
+            () => startDirectDownload(data)
+        );
+    }
 }
 
-
-/*
- * START DIRECT DOWNLOAD
- */
 
 async function startDirectDownload(data) {
 
@@ -1717,9 +1516,7 @@ async function startDirectDownload(data) {
             "downloadStatus"
         );
 
-    if (!downloadButton) {
-        return;
-    }
+    if (!downloadButton) return;
 
     downloadButton.disabled = true;
 
@@ -1730,15 +1527,17 @@ async function startDirectDownload(data) {
     downloadButton.innerHTML =
         "⏳ <span>STARTING...</span>";
 
-    downloadStatus.textContent =
-        "Starting download...";
-
+    if (downloadStatus) {
+        downloadStatus.textContent =
+            "Starting download...";
+    }
 
     try {
 
         const response =
             await fetch(
-                API_BASE + "/download/start",
+                API_BASE +
+                "/download/start",
                 {
                     method: "POST",
 
@@ -1756,27 +1555,24 @@ async function startDirectDownload(data) {
                 }
             );
 
-
         const result =
             await response.json();
-
 
         if (
             !response.ok ||
             !result.success
         ) {
-
             throw new Error(
                 result.error ||
                 "Download could not be started."
             );
-
         }
 
-
-        downloadStatus.textContent =
-            "Download started. ID: " +
-            result.id;
+        if (downloadStatus) {
+            downloadStatus.textContent =
+                "Download started. ID: " +
+                result.id;
+        }
 
         downloadButton.innerHTML =
             "✓ <span>DOWNLOAD STARTED</span>";
@@ -1785,13 +1581,15 @@ async function startDirectDownload(data) {
 
         console.error(error);
 
-        downloadStatus.textContent =
-            error.message ||
-            "Download failed.";
+        if (downloadStatus) {
+            downloadStatus.textContent =
+                error.message ||
+                "Download failed.";
 
-        downloadStatus.classList.add(
-            "analyze-error"
-        );
+            downloadStatus.classList.add(
+                "analyze-error"
+            );
+        }
 
         downloadButton.disabled =
             false;
@@ -1802,174 +1600,301 @@ async function startDirectDownload(data) {
 
         downloadButton.innerHTML =
             "↓ <span>DOWNLOAD</span>";
-
     }
-
 }
 
 
-/*
- * FORMAT BYTES
- */
+async function analyzeVideo() {
 
-function formatBytes(bytes) {
+    const url =
+        input.value.trim();
 
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-        return "Unknown size";
-    }
+    if (!url) {
 
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-    let value = bytes;
-    let index = 0;
-
-    while (
-        value >= 1024 &&
-        index < units.length - 1
-    ) {
-
-        value /= 1024;
-        index++;
-
-    }
-
-    return (
-        value < 10 && index > 0
-            ? value.toFixed(1)
-            : value.toFixed(0)
-    ) + " " + units[index];
-
-}
-
-
-/*
- * HTML SAFETY
- */
-
-
- */
-
-function escapeHtml(
-    value
-) {
-
-    return String(value)
-        .replace(
-            /&/g,
-            "&amp;"
-        )
-        .replace(
-            /</g,
-            "&lt;"
-        )
-        .replace(
-            />/g,
-            "&gt;"
-        )
-        .replace(
-            /"/g,
-            "&quot;"
-        )
-        .replace(
-            /'/g,
-            "&#039;"
+        showStatus(
+            "Please paste a supported video URL.",
+            true
         );
 
-}
+        input.focus();
 
+        return;
+    }
 
-/*
- * BACK
- */
+    analyzeButton.disabled =
+        true;
 
-backButton.addEventListener(
-    "click",
-    () => {
+    analyzeButton.classList.add(
+        "loading"
+    );
 
-        resultPage.style.display =
-            "none";
+    if (analyzeText) {
+        analyzeText.textContent =
+            "ANALYZING";
+    }
 
-        homePage.style.display =
-            "block";
+    showStatus(
+        "Analyzing video..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                API_BASE +
+                "/analyze",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({
+                            url: url
+                        })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (
+            !response.ok ||
+            !data.success
+        ) {
+            throw new Error(
+                data.error ||
+                "Analysis failed."
+            );
+        }
+
+        if (videoTitle) {
+            videoTitle.textContent =
+                data.metadata?.title ||
+                data.media?.filename ||
+                "Untitled video";
+        }
+
+        if (videoUrl) {
+            videoUrl.textContent =
+                data.source?.url ||
+                url;
+        }
+
+        if (videoThumbnail) {
+            videoThumbnail.src =
+                data.metadata?.thumbnail ||
+                "";
+        }
+
+        if (videoDuration) {
+            videoDuration.textContent =
+                data.metadata?.duration ||
+                "—";
+        }
+
+        if (
+            Array.isArray(data.formats) &&
+            data.formats.length > 0
+        ) {
+
+            renderFormats(
+                data.formats
+            );
+
+        } else if (
+            data.media &&
+            data.media.content_type
+        ) {
+
+            renderDirectMedia(
+                data
+            );
+
+        } else {
+
+            formatList.innerHTML = `
+                <div class="format-option">
+                    No downloadable formats
+                    were returned.
+                </div>
+            `;
+        }
+
+        showStatus(
+            "Analysis completed."
+        );
+
+        if (homePage) {
+            homePage.style.display =
+                "none";
+        }
+
+        if (resultPage) {
+            resultPage.style.display =
+                "block";
+        }
 
         window.scrollTo(
             0,
             0
         );
 
+    } catch (error) {
+
+        console.error(
+            "Analyze error:",
+            error
+        );
+
+        showStatus(
+            error.message ||
+            "Unable to analyze this URL. Please try again.",
+            true
+        );
+
+    } finally {
+
+        analyzeButton.disabled =
+            false;
+
+        analyzeButton.classList.remove(
+            "loading"
+        );
+
+        if (analyzeText) {
+            analyzeText.textContent =
+                "ANALYZE";
+        }
     }
-);
+}
 
 
-/*
- * QUICK ACCESS
- */
+if (analyzeButton) {
 
-document
-    .getElementById("downloadsQuick")
-    .addEventListener(
+    analyzeButton.addEventListener(
+        "click",
+        analyzeVideo
+    );
+}
+
+
+if (input) {
+
+    input.addEventListener(
+        "keydown",
+        event => {
+
+            if (
+                event.key === "Enter"
+            ) {
+                event.preventDefault();
+                analyzeVideo();
+            }
+        }
+    );
+}
+
+
+if (backButton) {
+
+    backButton.addEventListener(
         "click",
         () => {
 
+            if (resultPage) {
+                resultPage.style.display =
+                    "none";
+            }
+
+            if (homePage) {
+                homePage.style.display =
+                    "block";
+            }
+
+            window.scrollTo(
+                0,
+                0
+            );
+        }
+    );
+}
+
+
+const downloadsQuick =
+    document.getElementById(
+        "downloadsQuick"
+    );
+
+if (downloadsQuick) {
+
+    downloadsQuick.addEventListener(
+        "click",
+        () => {
             alert(
                 "Downloads screen coming next."
             );
-
         }
     );
+}
 
 
-document
-    .getElementById("historyQuick")
-    .addEventListener(
+const historyQuick =
+    document.getElementById(
+        "historyQuick"
+    );
+
+if (historyQuick) {
+
+    historyQuick.addEventListener(
         "click",
         () => {
-
             alert(
                 "History screen coming next."
             );
-
         }
     );
+}
 
 
-document
-    .getElementById("viewAll")
-    .addEventListener(
+const viewAll =
+    document.getElementById(
+        "viewAll"
+    );
+
+if (viewAll) {
+
+    viewAll.addEventListener(
         "click",
         () => {
-
             alert(
                 "Downloads screen coming next."
             );
-
         }
     );
+}
 
 
-document
-    .getElementById("settingsButton")
-    .addEventListener(
+const settingsButton =
+    document.getElementById(
+        "settingsButton"
+    );
+
+if (settingsButton) {
+
+    settingsButton.addEventListener(
         "click",
         () => {
-
             alert(
                 "Settings screen coming next."
             );
-
         }
     );
+}
 
-
-/*
- * NAVIGATION
- */
 
 document
     .querySelectorAll(".nav-item")
@@ -1995,32 +1920,32 @@ document
                         "active"
                     );
 
-
                     if (
                         item.dataset.page ===
                         "home"
                     ) {
 
-                        resultPage.style.display =
-                            "none";
+                        if (resultPage) {
+                            resultPage.style.display =
+                                "none";
+                        }
 
-                        homePage.style.display =
-                            "block";
+                        if (homePage) {
+                            homePage.style.display =
+                                "block";
+                        }
 
                         window.scrollTo(
                             0,
                             0
                         );
-
                     }
-
                 }
             );
-
         }
     );
-
 </script>
+
 
 </body>
 </html>
