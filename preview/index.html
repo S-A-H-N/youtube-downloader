@@ -1272,6 +1272,9 @@ const analyzeButton =
 const analyzeText =
     document.getElementById("analyzeText");
 
+const clearButton =
+    document.getElementById("clearButton");
+
 const homePage =
     document.getElementById("homePage");
 
@@ -1770,6 +1773,24 @@ async function analyzeVideo() {
                 "ANALYZE";
         }
     }
+}
+
+
+if (clearButton) {
+
+    clearButton.addEventListener(
+        "click",
+        () => {
+
+            if (input) {
+                input.value = "";
+                input.focus();
+            }
+
+            showStatus("");
+
+        }
+    );
 }
 
 
